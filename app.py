@@ -17,229 +17,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Fallback default prompts (used if no sheet is connected) ───────────────────
+# ── Fallback prompts (used only if no sheet is connected) ──────────────────────
 
 FALLBACK_PROMPTS = {
     "Furniture": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-TONE: Mirror the seller's language exactly. Never add adjectives, superlatives, or embellishments the seller did not use. If the seller writes plainly, the description must be plain. Avoid subjective, unverifiable claims like "stunning," "gorgeous," "beautiful," "perfect for any home," or "one of a kind". Every sentence should add factual value.
-
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters. No fluff, no filler, no marketing hyperbole.
-
-FORMAT: Establish item type, origin, and era early — but vary how you open. Complete sentences, third person.
-
-SEO: Repeat the primary item descriptor and key material naturally 2-3 times. The first 160 characters will appear in search snippets — open with the most specific, keyword-rich sentence.
-
-ATTRIBUTION — use exactly one:
-By [Name] — documented (marks, labels, receipts)
-Attributed to [Name] — strong likelihood, no documentation
-In the style of [Name] — resembles design; also name the actual maker
-Never use 'Attributed to' or 'In the style of' for: Gabriella Crespi, Piero Fornasetti, Vladimir Kagan, Francois-Xavier & Claude Lalanne, Jean Royere.
-
-CONTENT — prioritize in this order:
-1. Materials — always specific ('solid walnut', 'patinated brass', 'hand-blown glass')
-2. Condition — factual description of actual wear, not general language
-3. Period and country of manufacture — both, if present
-4. Functional details — dimensions, adjustability, drawer count, seat height
-Designer name: include, but do not lead with or build the description around.
-
-CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose any restoration explicitly.
-
-PLACEMENT: Include functional placement context only when it is a factual attribute of the piece (e.g., outdoor-rated, room divider, dining height). Never suggest how a buyer should style or decorate with the item.
-
-VARIETY: Every description must read differently. Vary sentence structure, opening approach, and closing. Never default to 'suited to X interiors' or similar formulaic closings.
-
-NEVER: 'Oriental' (use specific country), 'Primitive', urgency language, or collector superlatives (rare, important, museum quality)""",
-        "bullets": """Write 3 sales-optimized bullet points for this item.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Order by what matters most to collectors and buyers
-• Include specific materials (e.g., solid walnut, travertine, cognac leather)
-• Explain why the item is notable
-• Include one key fact about the designer or manufacturer
-• Highlight what makes this piece superior to comparable items
-
-Tone: Concise, authoritative, written for high-end design collectors. Avoid filler words and marketing fluff.
-
-Output 3 bullet points only, one per line, starting with •"""
-    },
-    "Lighting": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a lighting item using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-TONE: Mirror the seller's language exactly. Avoid subjective claims like "warm glow," "creates ambiance," "statement piece." Every sentence should add factual value.
-
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
-
-FORMAT: Establish fixture type, origin, and era early. Complete sentences, third person.
-
-SEO: Repeat the primary fixture type and key material naturally 2-3 times. Open with the most specific, keyword-rich sentence.
-
-ATTRIBUTION — use exactly one:
-By [Name] — documented
-Attributed to [Name] — strong likelihood, no documentation
-In the style of [Name] — resembles design; also name the actual maker
-Never use 'Attributed to' or 'In the style of' for: Gabriella Crespi, Piero Fornasetti, Vladimir Kagan, Serge Mouille, Gino Sarfatti.
-For studio pieces: By [Designer] for [Manufacturer].
-
-CONTENT — prioritize in this order:
-1. Materials — always specific ('patinated brass', 'mouth-blown opaline glass', 'spun aluminum')
-2. Electrical — whether rewired, socket type, wattage rating, cord length
-3. Condition — note if original shade, hardware, or canopy is present or replaced
-4. Period and country of manufacture
-5. Fixture type, number of bulbs, adjustability, mounting, overall height, shade diameter
-
-CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose any rewiring or restoration explicitly.
-
-PLACEMENT: Include only factual placement context (hardwired vs. plug-in, ceiling height required, UL-listed for damp). Never suggest mood or atmosphere.
-
-NEVER: 'Oriental', urgency language, collector superlatives, atmosphere claims ('warm,' 'cozy,' 'dramatic').""",
-        "bullets": """Write 3 sales-optimized bullet points for this lighting item.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Lead with the most important material or maker fact
-• Include electrical details (rewired, wattage, plug-in vs hardwired) if available
-• Note if original shade or hardware is present
-• Avoid superlatives and unverifiable claims
-
-Output 3 bullet points only, one per line, starting with •"""
-    },
-    "Rugs": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a rug using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-TONE: Mirror the seller's language exactly. Avoid subjective claims like "stunning," "vibrant," "rich color." Every sentence should add factual value.
-
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
-
-FORMAT: Establish rug type, origin, and era early. Complete sentences, third person.
-
-SEO: Repeat the primary rug type and region naturally 2-3 times. Open with the most specific, keyword-rich sentence.
-
-ATTRIBUTION: Attribute to region, workshop, or tribal group. Format: [Region/Tribe] [type] (e.g., 'Tabriz carpet', 'Beni Ourain rug'). If documented maker: By [Name].
-Never use 'Oriental' — always use the specific country or region.
-
-CONTENT — prioritize in this order:
-1. Construction — hand-knotted, hand-woven, flat-weave, hooked, tufted; pile material
-2. Dimensions — always include if provided
-3. Condition — pile wear, fringe condition, repairs, reweaving, moth damage
-4. Region and period — antique (100+ years) or vintage (20–99 years)
-5. Design — pattern type, field color, border description
-Knot count: include if provided, do not estimate.
-
-CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose repairs explicitly.
-
-NEVER: 'Oriental', 'Primitive', urgency language, collector superlatives, color superlatives ('vibrant,' 'rich,' 'jewel-toned').""",
-        "bullets": """Write 3 sales-optimized bullet points for this rug.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Lead with construction type and region of origin
-• Include dimensions if available
-• Note condition specifics (pile wear, repairs, fringe)
-• Avoid superlatives and color embellishments
-
-Output 3 bullet points only, one per line, starting with •"""
-    },
-    "Jewelry": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a jewelry item using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
-
-FORMAT: Establish item type, metal, and era early. Complete sentences, third person.
-
-SEO: Repeat the primary item descriptor and key material naturally 2-3 times.
-
-ATTRIBUTION — use exactly one:
-By [Name] — documented (hallmarks, receipts, labels)
-Attributed to [Name] — strong likelihood, no documentation
-In the style of [Name] — resembles design; also name the actual maker
-
-CONTENT — prioritize in this order:
-1. Metal and gemstones — always specific (18k yellow gold, VS1 diamond, natural Burma ruby)
-2. Hallmarks, maker's marks, assay marks
-3. Condition — factual
-4. Period and country of manufacture
-5. Weight, dimensions, ring size if provided
-
-CONDITION — use only: Distressed / Fair / Good / Excellent / New.
-
-NEVER: urgency language, collector superlatives, unverifiable claims about stone quality.""",
-        "bullets": """Write 3 sales-optimized bullet points for this jewelry item.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Lead with the most important material or gemstone fact
-• Include metal purity and gemstone specifics where available
-• Note any hallmarks, maker's marks, or provenance
-• Avoid superlatives and unverifiable claims
-
-Output 3 bullet points only, one per line, starting with •"""
-    },
-    "Fine Art": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a fine art item using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-LENGTH: Min 400 characters. For complex works with provenance, condition, and attribution all present, target 1,000+ characters. No filler.
-
-SEO: Repeat the primary descriptor and medium naturally 2-3 times. The first 160 characters appear in search snippets.
-
-ATTRIBUTION — use exactly one:
-By [Name] — documented
-Attributed to [Name] — strong likelihood, research-based
-Circle of [Name] — artist's influence, associated but not a student
-In the Style of [Name] — stylistic resemblance, within 50 years
-After [Name] — authorized or posthumous reproduction
-
-CONTENT priority: 1. Provenance 2. Medium 3. Condition 4. Artist 5. Dimensions/framing 6. Period/century
-
-CONDITION — use only: Distressed / Fair / Good / Excellent / New.
-
-NEVER: urgency language, collector superlatives (rare, important, museum quality)""",
-        "bullets": """Write 3 sales-optimized bullet points for this artwork.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Lead with the most compelling provenance or attribution fact
-• Include medium and dimensions if available
-• Note exhibition history or publication if present
-• Avoid superlatives and unverifiable claims
-
-Output 3 bullet points only, one per line, starting with •"""
-    },
-    "Fashion": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a fashion item using the seller's text and product image provided.
-ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
-
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
-
-ATTRIBUTION: Fashion uses only 'By [Brand]' format. For designer-era pieces: 'By [Brand], designed by [Designer]'. No 'Attributed to' or 'In the Style of'.
-
-CONTENT — prioritize in this order:
-1. Materials — always specific (100% cashmere, vegetable-tanned leather, silk charmeuse)
-2. Condition — factual description of actual wear
-3. Brand and designer era
-4. Size and measurements
-5. Hardware, lining, closures
-
-CONDITION — use only: New / Excellent / Good / Fair (no Distressed for fashion).
-
-NEVER: urgency language, collector superlatives, unverifiable condition claims.""",
-        "bullets": """Write 3 sales-optimized bullet points for this fashion item.
-
-Rules:
-• Each bullet must be 100 characters or less
-• Lead with the most important material or brand fact
-• Include size, measurements, or fit notes if available
-• Note hardware, lining, or construction details
-• Avoid superlatives and unverifiable claims
-
-Output 3 bullet points only, one per line, starting with •"""
+        "system": "Fallback: connect a Google Sheet to load your prompts.",
+        "bullets": ""
     }
 }
 
@@ -247,9 +30,9 @@ Output 3 bullet points only, one per line, starting with •"""
 
 def load_prompts_from_sheet(url):
     """
-    Read prompts from a published Google Sheet CSV URL.
+    Fetch a published Google Sheet CSV.
     Expected columns: Name | System Prompt | Bullet Prompt
-    Returns (dict, error_message).
+    Returns (dict, error_string).
     """
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -265,30 +48,13 @@ def load_prompts_from_sheet(url):
                     "bullets": row.get("Bullet Prompt", "").strip()
                 }
         if not prompts:
-            return None, "Sheet loaded but no prompts found. Check column names: Name, System Prompt, Bullet Prompt."
+            return None, "Sheet loaded but no prompts found. Check column headers: Name | System Prompt | Bullet Prompt"
         return prompts, None
     except Exception as e:
         return None, str(e)
 
 
-# ── Session state init ─────────────────────────────────────────────────────────
-
-if "saved_prompts" not in st.session_state:
-    st.session_state.saved_prompts = dict(FALLBACK_PROMPTS)
-
-if "active_prompt_name" not in st.session_state:
-    st.session_state.active_prompt_name = "Furniture"
-
-if "system_prompt" not in st.session_state:
-    st.session_state.system_prompt = FALLBACK_PROMPTS["Furniture"]["system"]
-
-if "bullet_prompt" not in st.session_state:
-    st.session_state.bullet_prompt = FALLBACK_PROMPTS["Furniture"]["bullets"]
-
-if "sheet_loaded" not in st.session_state:
-    st.session_state.sheet_loaded = False
-
-# ── API key ────────────────────────────────────────────────────────────────────
+# ── Secrets ────────────────────────────────────────────────────────────────────
 
 def get_secret(key):
     try:
@@ -299,21 +65,29 @@ def get_secret(key):
 secret_api_key = get_secret("ANTHROPIC_API_KEY")
 secret_sheet_url = get_secret("PROMPTS_SHEET_URL")
 
+# ── Session state init ─────────────────────────────────────────────────────────
+
+if "prompts" not in st.session_state:
+    st.session_state.prompts = dict(FALLBACK_PROMPTS)
+
+if "active" not in st.session_state:
+    st.session_state.active = list(FALLBACK_PROMPTS.keys())[0]
+
+if "sheet_loaded" not in st.session_state:
+    st.session_state.sheet_loaded = False
+
 # Auto-load from sheet secret on first run
 if secret_sheet_url and not st.session_state.sheet_loaded:
     loaded, err = load_prompts_from_sheet(secret_sheet_url)
     if loaded:
-        st.session_state.saved_prompts = loaded
-        first_key = list(loaded.keys())[0]
-        st.session_state.active_prompt_name = first_key
-        st.session_state.system_prompt = loaded[first_key]["system"]
-        st.session_state.bullet_prompt = loaded[first_key].get("bullets", "")
+        st.session_state.prompts = loaded
+        st.session_state.active = list(loaded.keys())[0]
         st.session_state.sheet_loaded = True
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
 st.title("🪑 1stDibs Prompt Tester")
-st.caption("Test AI description prompts against real item data.")
+st.caption("Select a prompt, upload item data, and run.")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
@@ -330,131 +104,101 @@ with st.sidebar:
 
     model = st.selectbox("Model",
         options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-        index=0)
+        index=0,
+        help="Opus = best quality. Sonnet = faster & cheaper."
+    )
 
     num_rows = st.slider("Rows to test", min_value=1, max_value=100, value=5)
     workers = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
 
     st.divider()
 
-    # ── Google Sheet sync ──────────────────────────────────────────────────────
-    st.subheader("Prompt Library (Google Sheets)")
+    # ── Google Sheet ───────────────────────────────────────────────────────────
+    st.subheader("Prompt Library")
 
     if secret_sheet_url:
-        st.success("✓ Sheet connected via settings")
+        st.success("✓ Sheet connected")
+        st.caption("Edit prompts in your Google Sheet, then sync.")
         if st.button("🔄 Sync from sheet", use_container_width=True):
             loaded, err = load_prompts_from_sheet(secret_sheet_url)
             if loaded:
-                st.session_state.saved_prompts = loaded
-                st.success(f"Synced {len(loaded)} prompts from sheet.")
+                st.session_state.prompts = loaded
+                if st.session_state.active not in loaded:
+                    st.session_state.active = list(loaded.keys())[0]
+                st.success(f"Synced {len(loaded)} prompts.")
                 st.rerun()
             else:
                 st.error(f"Sync failed: {err}")
     else:
         sheet_url_input = st.text_input(
-            "Paste your Google Sheet CSV URL",
-            placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv",
-            help="Publish your sheet as CSV and paste the URL here."
+            "Google Sheet CSV URL",
+            placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv"
         )
         if st.button("Load from sheet", use_container_width=True):
             if sheet_url_input.strip():
                 loaded, err = load_prompts_from_sheet(sheet_url_input.strip())
                 if loaded:
-                    st.session_state.saved_prompts = loaded
-                    first_key = list(loaded.keys())[0]
-                    st.session_state.active_prompt_name = first_key
-                    st.session_state.system_prompt = loaded[first_key]["system"]
-                    st.session_state.bullet_prompt = loaded[first_key].get("bullets", "")
-                    st.success(f"Loaded {len(loaded)} prompts. To make this permanent, add PROMPTS_SHEET_URL to your Streamlit secrets.")
+                    st.session_state.prompts = loaded
+                    st.session_state.active = list(loaded.keys())[0]
+                    st.success(f"Loaded {len(loaded)} prompts.")
+                    st.info("To make this permanent, add PROMPTS_SHEET_URL to Streamlit secrets.")
                     st.rerun()
                 else:
-                    st.error(f"Could not load sheet: {err}")
+                    st.error(f"Could not load: {err}")
             else:
                 st.warning("Paste a sheet URL first.")
 
     st.divider()
 
     # ── Prompt selector ────────────────────────────────────────────────────────
-    st.subheader("Saved Prompts")
+    st.subheader("Select Prompt")
 
-    prompt_names = list(st.session_state.saved_prompts.keys())
-    selected = st.selectbox(
-        "Load a prompt",
+    prompt_names = list(st.session_state.prompts.keys())
+    idx = prompt_names.index(st.session_state.active) if st.session_state.active in prompt_names else 0
+
+    selected = st.radio(
+        "Vertical",
         options=prompt_names,
-        index=prompt_names.index(st.session_state.active_prompt_name)
-        if st.session_state.active_prompt_name in prompt_names else 0
+        index=idx,
+        label_visibility="collapsed"
     )
+    st.session_state.active = selected
 
-    if st.button("Load", use_container_width=True):
-        st.session_state.active_prompt_name = selected
-        st.session_state.system_prompt = st.session_state.saved_prompts[selected]["system"]
-        st.session_state.bullet_prompt = st.session_state.saved_prompts[selected].get("bullets", "")
-        st.rerun()
+# ── Active prompt ──────────────────────────────────────────────────────────────
 
-    st.divider()
-
-    new_prompt_name = st.text_input("Save current prompt as...",
-                                    placeholder="e.g. Seating, Decorative Objects")
-    if st.button("Save prompt", use_container_width=True):
-        if new_prompt_name.strip():
-            st.session_state.saved_prompts[new_prompt_name.strip()] = {
-                "system": st.session_state.system_prompt,
-                "bullets": st.session_state.bullet_prompt
-            }
-            st.session_state.active_prompt_name = new_prompt_name.strip()
-            st.success(f"Saved '{new_prompt_name.strip()}'")
-        else:
-            st.warning("Enter a name first.")
-
-    st.divider()
-
-    st.caption("Export / import prompts")
-    prompts_json = json.dumps(st.session_state.saved_prompts, indent=2)
-    st.download_button("⬇ Export prompts JSON", data=prompts_json,
-                       file_name="prompts.json", mime="application/json",
-                       use_container_width=True)
-
-    uploaded_prompts = st.file_uploader("Import prompts JSON", type=["json"],
-                                        label_visibility="collapsed")
-    if uploaded_prompts:
-        try:
-            imported = json.loads(uploaded_prompts.read().decode("utf-8"))
-            st.session_state.saved_prompts.update(imported)
-            st.success(f"Imported {len(imported)} prompts.")
-        except Exception as e:
-            st.error(f"Failed to import: {e}")
+active_prompt = st.session_state.prompts.get(st.session_state.active, {})
+system_prompt = active_prompt.get("system", "")
+bullet_prompt = active_prompt.get("bullets", "")
 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
 
-tab1, tab2 = st.tabs(["📝 Prompts", "📂 Data"])
+tab1, tab2 = st.tabs(["📝 Prompt Preview", "📂 Data"])
 
 with tab1:
-    st.subheader(f"System Prompt — {st.session_state.active_prompt_name}")
-    system_prompt = st.text_area(
-        "System prompt",
-        value=st.session_state.system_prompt,
-        height=350,
-        label_visibility="collapsed",
-        key="system_prompt_input"
+    st.subheader(f"{st.session_state.active} — System Prompt")
+    st.text_area(
+        "system_preview",
+        value=system_prompt,
+        height=300,
+        disabled=True,
+        label_visibility="collapsed"
     )
-    st.session_state.system_prompt = system_prompt
-    st.caption(f"{len(system_prompt)} characters")
+    st.caption(f"{len(system_prompt)} characters  ·  Edit in Google Sheets")
 
-    st.divider()
+    enable_bullets = st.toggle("Enable bullet point prompt", value=bool(bullet_prompt))
 
-    enable_bullets = st.toggle("Enable bullet point prompt", value=True)
-
-    if enable_bullets:
+    if enable_bullets and bullet_prompt:
         st.subheader("Bullet Point Prompt")
-        bullet_prompt = st.text_area(
-            "Bullet prompt",
-            value=st.session_state.bullet_prompt,
-            height=250,
-            label_visibility="collapsed",
-            key="bullet_prompt_input"
+        st.text_area(
+            "bullets_preview",
+            value=bullet_prompt,
+            height=200,
+            disabled=True,
+            label_visibility="collapsed"
         )
-        st.session_state.bullet_prompt = bullet_prompt
-        st.caption(f"{len(bullet_prompt)} characters")
+        st.caption(f"{len(bullet_prompt)} characters  ·  Edit in Google Sheets")
+    elif enable_bullets and not bullet_prompt:
+        st.info("No bullet prompt found for this vertical in the sheet. Add a 'Bullet Prompt' column.")
 
 with tab2:
     st.subheader("Upload Item Data")
@@ -474,7 +218,7 @@ with tab2:
             fieldnames = list(reader.fieldnames)
             st.success(f"✓ {len(rows)} rows — {len(fieldnames)} columns detected")
 
-            st.markdown("**Select columns to include as context in the prompt:**")
+            st.markdown("**Select columns to pass as context to the prompt:**")
             default_exclude = ["ITEM_IMAGE"]
             default_include = [c for c in fieldnames if c not in default_exclude]
             included_cols = st.multiselect(
@@ -520,15 +264,13 @@ def fetch_image_as_base64(url, timeout=10):
 
 
 def build_item_context(row, cols):
-    lines = []
-    for col in cols:
-        val = row.get(col, "").strip()
-        if val:
-            lines.append(f"{col}: {val}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"{col}: {row.get(col, '').strip()}"
+        for col in cols if row.get(col, "").strip()
+    )
 
 
-def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
+def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
                  inc_cols, img_col, mdl):
     notes = []
 
@@ -537,8 +279,7 @@ def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
     for trigger in BOILERPLATE_TRIGGERS:
         if trigger.lower() in raw_context.lower():
             lines = raw_context.split("\n")
-            filtered = [l for l in lines if trigger.lower() not in l.lower()]
-            cleaned_context = "\n".join(filtered)
+            cleaned_context = "\n".join(l for l in lines if trigger.lower() not in l.lower())
             notes.append(f"Boilerplate stripped ('{trigger}')")
             break
 
@@ -547,25 +288,20 @@ def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
 
     img_b64, img_meta = None, None
     if img_col and img_col != "(none)":
-        img_url = row.get(img_col, "")
-        img_b64, img_meta = fetch_image_as_base64(img_url)
+        img_b64, img_meta = fetch_image_as_base64(row.get(img_col, ""))
         if img_b64 is None:
             notes.append(f"Image unavailable: {img_meta}")
 
-    def build_content(prompt_text):
+    def build_content(user_text):
         content = []
         if img_b64:
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": img_meta, "data": img_b64}
-            })
-        content.append({
-            "type": "text",
-            "text": f"{prompt_text}\n\nITEM DATA:\n{cleaned_context or '(no data provided)'}"
-        })
+            content.append({"type": "image",
+                             "source": {"type": "base64", "media_type": img_meta, "data": img_b64}})
+        content.append({"type": "text",
+                         "text": f"{user_text}\n\nITEM DATA:\n{cleaned_context or '(no data provided)'}"})
         return content
 
-    def call_api(sys, user_content, max_tok=220):
+    def call_api(sys, user_content, max_tok):
         for attempt in range(3):
             try:
                 resp = client.messages.create(
@@ -582,28 +318,28 @@ def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
                 return ""
         return ""
 
-    new_description = call_api(
+    new_desc = call_api(
         sys_prompt,
         build_content("Write a listing description for this 1stDibs item. Stay between 400 and 800 characters total."),
         max_tok=220
     )
 
-    char_len = len(new_description)
-    if new_description and char_len < 400:
+    char_len = len(new_desc)
+    if new_desc and char_len < 400:
         notes.append(f"Below 400-char minimum ({char_len} chars)")
     if char_len > 800:
         notes.append(f"Exceeds 800-char maximum ({char_len} chars)")
 
     new_bullets = ""
-    if use_bullets and bullet_prompt_text.strip():
+    if use_bullets and bul_prompt.strip():
         new_bullets = call_api(
             "You are a luxury product copywriter for 1stDibs. Output only the bullet points requested.",
-            build_content(bullet_prompt_text),
+            build_content(bul_prompt),
             max_tok=150
         )
 
     result = dict(row)
-    result["NEW_DESCRIPTION"] = new_description
+    result["NEW_DESCRIPTION"] = new_desc
     result["CHAR_COUNT"] = char_len
     result["BULLET_POINTS"] = new_bullets
     result["NOTES"] = " | ".join(notes) if notes else ""
@@ -620,19 +356,19 @@ run_clicked = st.button("▶ Run Prompt", type="primary",
 
 if not api_key:
     st.warning("Add your Anthropic API key in the sidebar.")
-elif not system_prompt:
-    st.warning("Add a system prompt in the Prompts tab.")
+elif not system_prompt or system_prompt.startswith("Fallback:"):
+    st.warning("Connect a Google Sheet to load your prompts.")
 elif not rows:
     st.warning("Upload a CSV in the Data tab.")
 elif not included_cols:
     st.warning("Select at least one column to include as context.")
 
 if run_clicked and can_run:
+    use_bullets = enable_bullets and bool(bullet_prompt)
     client = anthropic.Anthropic(api_key=api_key)
     test_rows = rows[:num_rows]
-    use_bullets = enable_bullets and st.session_state.bullet_prompt.strip()
 
-    st.subheader(f"Running on {len(test_rows)} rows...")
+    st.subheader(f"Running {st.session_state.active} prompt on {len(test_rows)} rows...")
     progress_bar = st.progress(0)
     status_text = st.empty()
 
@@ -643,9 +379,7 @@ if run_clicked and can_run:
     def process(idx_row):
         idx, row = idx_row
         return idx, generate_row(
-            client, row,
-            st.session_state.system_prompt,
-            st.session_state.bullet_prompt,
+            client, row, system_prompt, bullet_prompt,
             use_bullets, included_cols, image_col, model
         )
 
@@ -665,18 +399,16 @@ if run_clicked and can_run:
     progress_bar.progress(1.0)
     status_text.text("✓ Done!")
 
+    # Metrics
     st.subheader("Results")
     avg_len = sum(r["CHAR_COUNT"] for r in results) / len(results)
-    below_min = sum(1 for r in results if 0 < r["CHAR_COUNT"] < 400)
-    over_max = sum(1 for r in results if r["CHAR_COUNT"] > 800)
-    with_notes = sum(1 for r in results if r["NOTES"])
-
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Avg length", f"{avg_len:.0f} chars")
-    m2.metric("Below 400", below_min)
-    m3.metric("Over 800", over_max)
-    m4.metric("With notes", with_notes)
+    m2.metric("Below 400", sum(1 for r in results if 0 < r["CHAR_COUNT"] < 400))
+    m3.metric("Over 800", sum(1 for r in results if r["CHAR_COUNT"] > 800))
+    m4.metric("With notes", sum(1 for r in results if r["NOTES"]))
 
+    # Side-by-side
     for r in results:
         label = r.get("NATURAL_KEY", "") or list(r.values())[0]
         with st.expander(f"**{label}** — {r['CHAR_COUNT']} chars"):
@@ -693,14 +425,13 @@ if run_clicked and can_run:
             with c2:
                 st.markdown("**New description**")
                 st.write(r.get("NEW_DESCRIPTION", "") or "_empty_")
-
             if use_bullets and r.get("BULLET_POINTS"):
                 st.markdown("**Bullet points**")
                 st.write(r["BULLET_POINTS"])
-
             if r["NOTES"]:
                 st.info(f"📝 {r['NOTES']}")
 
+    # Download
     out_fields = list(fieldnames) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
     if use_bullets:
         out_fields.append("BULLET_POINTS")
