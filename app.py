@@ -4,6 +4,7 @@ import io
 import json
 import base64
 import time
+import random
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,7 +28,7 @@ FALLBACK_PROMPTS = {
     }
 }
 
-# ── Smart Suggestions prompt (baked in, works across all verticals) ────────────
+# ── Smart Suggestions prompt ───────────────────────────────────────────────────
 
 SUGGESTIONS_SYSTEM = """You are a luxury product specialist for 1stDibs. \
 Review the seller's item data and the generated listing description. \
@@ -42,7 +43,6 @@ Return a short bulleted list only — no preamble, no explanation."""
 # ── Google Sheets loaders ──────────────────────────────────────────────────────
 
 def _fetch_sheet_csv(url):
-    """Fetch a published Google Sheet as CSV text. Returns (text, error)."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -52,11 +52,6 @@ def _fetch_sheet_csv(url):
 
 
 def load_prompts_from_sheet(url):
-    """
-    Fetch published Google Sheet CSV.
-    Expected columns: Name | System Prompt | Bullet Prompt
-    Returns (dict, error_string).
-    """
     text, err = _fetch_sheet_csv(url)
     if err:
         return None, err
@@ -75,10 +70,6 @@ def load_prompts_from_sheet(url):
 
 
 def load_items_from_sheet(url):
-    """
-    Fetch published Google Sheet CSV as item rows.
-    Returns (rows, fieldnames, error_string).
-    """
     text, err = _fetch_sheet_csv(url)
     if err:
         return None, None, err
@@ -89,25 +80,22 @@ def load_items_from_sheet(url):
     return rows, list(reader.fieldnames), None
 
 
-# ── Secrets ────────────────────────────────────────────────────────────────────
+# ── Secrets helpers ────────────────────────────────────────────────────────────
 
-def get_secret(key, subkey=None):
+def get_secret(key):
     try:
-        val = st.secrets[key]
-        return val[subkey] if subkey else val
+        return st.secrets[key]
     except Exception:
         return None
 
+def get_all_item_sheets():
+    try:
+        return dict(st.secrets["item_sheets"])
+    except Exception:
+        return {}
 
 secret_api_key   = get_secret("ANTHROPIC_API_KEY")
 secret_sheet_url = get_secret("PROMPTS_SHEET_URL")
-
-def get_item_sheet_url(vertical):
-    """Return configured item sheet URL for a vertical, or None."""
-    try:
-        return st.secrets["item_sheets"][vertical]
-    except Exception:
-        return None
 
 # ── Session state init ─────────────────────────────────────────────────────────
 
@@ -129,10 +117,10 @@ if "gsheet_rows" not in st.session_state:
 if "gsheet_fieldnames" not in st.session_state:
     st.session_state.gsheet_fieldnames = []
 
-if "gsheet_loaded_vertical" not in st.session_state:
-    st.session_state.gsheet_loaded_vertical = None
+if "gsheet_loaded_name" not in st.session_state:
+    st.session_state.gsheet_loaded_name = None
 
-# Auto-load prompts from sheet secret on first run
+# Auto-load prompts on first run
 if secret_sheet_url and not st.session_state.sheet_loaded:
     loaded, err = load_prompts_from_sheet(secret_sheet_url)
     if loaded:
@@ -150,30 +138,20 @@ st.caption("Select a prompt, load item data, and run.")
 with st.sidebar:
     st.header("Configuration")
 
-    if secret_api_key:
-        api_key = secret_api_key
-        st.success("✓ API key loaded")
-    else:
-        api_key = st.text_input("Anthropic API Key", type="password",
-                                help="Your sk-ant-... key.")
-
-    model = st.selectbox("Model",
-        options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-        index=0,
-        help="Opus = best quality. Sonnet = faster & cheaper."
-    )
-
-    num_rows = st.slider("Rows to test", min_value=1, max_value=100, value=5)
-    workers  = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
+    # Prompt selector at top as dropdown
+    st.subheader("Prompt")
+    prompt_names = list(st.session_state.prompts.keys())
+    idx = prompt_names.index(st.session_state.active) if st.session_state.active in prompt_names else 0
+    selected = st.selectbox("Select prompt", options=prompt_names, index=idx,
+                            label_visibility="collapsed")
+    st.session_state.active = selected
 
     st.divider()
 
-    # ── Prompt Library ─────────────────────────────────────────────────────────
+    # Prompt Library
     st.subheader("Prompt Library")
-
     if secret_sheet_url:
-        st.success("✓ Sheet connected")
-        st.caption("Edit prompts in your Google Sheet, then sync.")
+        st.caption("✓ Sheet connected · Edit prompts in Google Sheets")
         if st.button("🔄 Sync prompts", use_container_width=True):
             loaded, err = load_prompts_from_sheet(secret_sheet_url)
             if loaded:
@@ -205,13 +183,24 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Prompt selector ────────────────────────────────────────────────────────
-    st.subheader("Select Prompt")
-    prompt_names = list(st.session_state.prompts.keys())
-    idx = prompt_names.index(st.session_state.active) if st.session_state.active in prompt_names else 0
-    selected = st.radio("Vertical", options=prompt_names, index=idx,
-                        label_visibility="collapsed")
-    st.session_state.active = selected
+    # Run settings
+    st.subheader("Run Settings")
+
+    if secret_api_key:
+        api_key = secret_api_key
+    else:
+        api_key = st.text_input("Anthropic API Key", type="password",
+                                help="Your sk-ant-... key.")
+
+    model = st.selectbox("Model",
+        options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        index=0,
+        help="Opus = best quality. Sonnet = faster & cheaper."
+    )
+
+    num_rows    = st.slider("Rows to test", min_value=1, max_value=100, value=5)
+    sample_mode = st.radio("Row selection", ["From top", "Random sample"], horizontal=True)
+    workers     = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
 
 # ── Active prompt ──────────────────────────────────────────────────────────────
 
@@ -258,56 +247,55 @@ with tab1:
 
 with tab2:
     st.subheader("Item Data")
+    configured_sheets = get_all_item_sheets()
     data_source = st.radio("Source", ["📊 Google Sheet", "📂 Upload CSV"],
                            horizontal=True, label_visibility="collapsed")
 
-    rows        = []
-    fieldnames  = []
+    rows          = []
+    fieldnames    = []
     included_cols = []
-    image_col   = "(none)"
+    image_col     = "(none)"
 
     if data_source == "📊 Google Sheet":
-        # Check if this vertical has a configured sheet URL in secrets
-        auto_url = get_item_sheet_url(st.session_state.active)
 
-        # Auto-reload when vertical changes and a secret URL is configured
-        if auto_url and st.session_state.gsheet_loaded_vertical != st.session_state.active:
-            with st.spinner(f"Loading {st.session_state.active} item sheet..."):
-                loaded_rows, loaded_fns, err = load_items_from_sheet(auto_url)
-            if loaded_rows:
-                st.session_state.gsheet_rows = loaded_rows
-                st.session_state.gsheet_fieldnames = loaded_fns
-                st.session_state.gsheet_loaded_vertical = st.session_state.active
-            else:
-                st.error(f"Could not auto-load sheet: {err}")
+        if configured_sheets:
+            sheet_names   = list(configured_sheets.keys())
+            selected_name = st.selectbox("Select dataset", options=sheet_names,
+                                         label_visibility="collapsed")
+            load_col, reload_col = st.columns([3, 1])
+            with load_col:
+                load_btn = st.button("Load sheet", type="primary", use_container_width=True)
+            with reload_col:
+                reload_btn = st.button("🔄", help="Reload current sheet", use_container_width=True,
+                                       disabled=(st.session_state.gsheet_loaded_name != selected_name))
 
-        if auto_url:
-            st.success(f"✓ Auto-configured for **{st.session_state.active}**")
-            st.caption("Sheet URL is set in Streamlit secrets. Switch verticals in the sidebar to load a different sheet.")
-            if st.button("🔄 Reload sheet", use_container_width=False):
-                loaded_rows, loaded_fns, err = load_items_from_sheet(auto_url)
+            if load_btn or reload_btn:
+                with st.spinner(f"Loading {selected_name}..."):
+                    loaded_rows, loaded_fns, err = load_items_from_sheet(configured_sheets[selected_name])
                 if loaded_rows:
                     st.session_state.gsheet_rows = loaded_rows
                     st.session_state.gsheet_fieldnames = loaded_fns
-                    st.session_state.gsheet_loaded_vertical = st.session_state.active
+                    st.session_state.gsheet_loaded_name = selected_name
                     st.rerun()
                 else:
-                    st.error(f"Reload failed: {err}")
+                    st.error(f"Could not load: {err}")
         else:
-            st.caption("Paste a published Google Sheet CSV URL. To auto-load per vertical, add URLs to Streamlit secrets under `[item_sheets]`.")
+            st.caption("No item sheets configured in secrets. Add URLs under `[item_sheets]` to enable the dropdown.")
+
+        with st.expander("Load from a different URL"):
             manual_sheet_url = st.text_input(
                 "Sheet URL",
                 placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv",
                 label_visibility="collapsed"
             )
-            if st.button("Load sheet", type="secondary", use_container_width=True):
+            if st.button("Load URL", type="secondary", use_container_width=True):
                 if manual_sheet_url.strip():
                     with st.spinner("Loading..."):
                         loaded_rows, loaded_fns, err = load_items_from_sheet(manual_sheet_url.strip())
                     if loaded_rows:
                         st.session_state.gsheet_rows = loaded_rows
                         st.session_state.gsheet_fieldnames = loaded_fns
-                        st.session_state.gsheet_loaded_vertical = st.session_state.active
+                        st.session_state.gsheet_loaded_name = "Custom URL"
                         st.rerun()
                     else:
                         st.error(f"Could not load: {err}")
@@ -316,7 +304,7 @@ with tab2:
 
         if st.session_state.gsheet_rows:
             fns = st.session_state.gsheet_fieldnames
-            st.success(f"✓ {len(st.session_state.gsheet_rows)} rows — {len(fns)} columns")
+            st.success(f"✓ **{st.session_state.gsheet_loaded_name}** — {len(st.session_state.gsheet_rows)} rows, {len(fns)} columns")
             default_include = [c for c in fns if c not in ("ITEM_IMAGE",)]
             included_cols = st.multiselect("Columns to pass as context",
                                            options=fns, default=default_include)
@@ -325,7 +313,7 @@ with tab2:
                 options=["(none)"] + fns,
                 index=fns.index("ITEM_IMAGE") + 1 if "ITEM_IMAGE" in fns else 0
             )
-            rows      = st.session_state.gsheet_rows
+            rows       = st.session_state.gsheet_rows
             fieldnames = fns
             with st.expander("Preview first 3 rows"):
                 for r in rows[:3]:
@@ -336,9 +324,9 @@ with tab2:
                                          label_visibility="collapsed")
         if uploaded_file:
             try:
-                content  = uploaded_file.read().decode("utf-8")
-                reader   = csv.DictReader(io.StringIO(content))
-                rows     = list(reader)
+                content    = uploaded_file.read().decode("utf-8")
+                reader     = csv.DictReader(io.StringIO(content))
+                rows       = list(reader)
                 fieldnames = list(reader.fieldnames)
                 st.success(f"✓ {len(rows)} rows — {len(fieldnames)} columns detected")
                 default_include = [c for c in fieldnames if c not in ("ITEM_IMAGE",)]
@@ -460,9 +448,10 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
     if not cleaned_context.strip():
         notes.append("No usable item data in selected columns")
 
+    img_url_for_display = row.get(img_col, "") if img_col and img_col != "(none)" else ""
     img_b64, img_meta = None, None
-    if img_col and img_col != "(none)":
-        img_b64, img_meta = fetch_image_as_base64(row.get(img_col, ""))
+    if img_url_for_display:
+        img_b64, img_meta = fetch_image_as_base64(img_url_for_display)
         if img_b64 is None:
             notes.append(f"Image unavailable: {img_meta}")
 
@@ -519,11 +508,14 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
     # Call 3 — smart suggestions (optional)
     new_suggestions = ""
     if use_suggestions:
-        suggestions_user = build_content(
-            "Review this item and its generated description. What specific information should the seller add?",
-            extra_context=f"GENERATED DESCRIPTION:\n{new_desc}" if new_desc else ""
+        new_suggestions = call_api(
+            SUGGESTIONS_SYSTEM,
+            build_content(
+                "Review this item and its generated description. What specific information should the seller add?",
+                extra_context=f"GENERATED DESCRIPTION:\n{new_desc}" if new_desc else ""
+            ),
+            max_tok=200
         )
-        new_suggestions = call_api(SUGGESTIONS_SYSTEM, suggestions_user, max_tok=200)
 
     result = dict(row)
     result["NEW_DESCRIPTION"]   = new_desc
@@ -531,6 +523,7 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
     result["BULLET_POINTS"]     = new_bullets
     result["SMART_SUGGESTIONS"] = new_suggestions
     result["NOTES"]             = " | ".join(notes) if notes else ""
+    result["_IMG_URL"]          = img_url_for_display
     return result
 
 
@@ -538,7 +531,6 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
 
 st.divider()
 
-# Determine active data source (CSV/gSheet takes priority over Quick Entry)
 has_sheet_data = bool(rows and included_cols)
 has_manual     = bool(st.session_state.manual_rows)
 
@@ -547,19 +539,18 @@ if has_sheet_data:
     run_cols       = included_cols
     run_img_col    = image_col
     run_fieldnames = fieldnames
-    data_source_label = f"{len(rows)} rows"
 elif has_manual:
     run_rows       = st.session_state.manual_rows
     run_cols       = MANUAL_CONTEXT_COLS
     run_img_col    = "ITEM_IMAGE"
     run_fieldnames = MANUAL_FIELDNAMES
-    data_source_label = f"{len(st.session_state.manual_rows)} quick-entry item(s)"
 else:
-    run_rows = run_cols = run_fieldnames = []
-    run_img_col = "(none)"
-    data_source_label = ""
+    run_rows       = []
+    run_cols       = []
+    run_img_col    = "(none)"
+    run_fieldnames = []
 
-can_run = api_key and system_prompt and run_rows and run_cols
+can_run = bool(api_key and system_prompt and run_rows and run_cols)
 run_clicked = st.button("▶ Run Prompt", type="primary",
                         disabled=not can_run, use_container_width=True)
 
@@ -576,9 +567,14 @@ if run_clicked and can_run:
     use_bullets     = enable_bullets and bool(bullet_prompt)
     use_suggestions = enable_suggestions
     client          = anthropic.Anthropic(api_key=api_key)
-    test_rows       = run_rows[:num_rows]
 
-    st.subheader(f"Running {st.session_state.active} prompt on {len(test_rows)} {data_source_label}...")
+    # Sample selection
+    if sample_mode == "Random sample" and len(run_rows) > num_rows:
+        test_rows = random.sample(run_rows, num_rows)
+    else:
+        test_rows = run_rows[:num_rows]
+
+    st.subheader(f"Running **{st.session_state.active}** on {len(test_rows)} item(s)...")
     progress_bar = st.progress(0)
     status_text  = st.empty()
 
@@ -603,7 +599,8 @@ if run_clicked and can_run:
                 progress_bar.progress(done[0] / len(test_rows))
                 status_text.text(
                     f"Processed {done[0]} of {len(test_rows)}: "
-                    f"{result.get('ITEM_TITLE', result.get('NATURAL_KEY', ''))} ({result['CHAR_COUNT']} chars)"
+                    f"{result.get('ITEM_TITLE', result.get('NATURAL_KEY', ''))} "
+                    f"({result['CHAR_COUNT']} chars)"
                 )
 
     progress_bar.progress(1.0)
@@ -618,10 +615,17 @@ if run_clicked and can_run:
     m3.metric("Over 800",   sum(1 for r in results if r["CHAR_COUNT"] > 800))
     m4.metric("With notes", sum(1 for r in results if r["NOTES"]))
 
-    # Side-by-side results
     for r in results:
         label = r.get("ITEM_TITLE") or r.get("NATURAL_KEY") or list(r.values())[0]
         with st.expander(f"**{label}** — {r['CHAR_COUNT']} chars"):
+
+            # Image at top if available
+            if r.get("_IMG_URL"):
+                try:
+                    st.image(r["_IMG_URL"], width=300)
+                except Exception:
+                    pass
+
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Original**")
@@ -637,16 +641,19 @@ if run_clicked and can_run:
             with c2:
                 st.markdown("**New description**")
                 st.write(r.get("NEW_DESCRIPTION", "") or "_empty_")
+
             if use_bullets and r.get("BULLET_POINTS"):
                 st.markdown("**Bullet points**")
                 st.write(r["BULLET_POINTS"])
+
             if use_suggestions and r.get("SMART_SUGGESTIONS"):
                 st.markdown("**💡 Smart Suggestions**")
                 st.info(r["SMART_SUGGESTIONS"])
+
             if r["NOTES"]:
                 st.caption(f"📝 {r['NOTES']}")
 
-    # Download
+    # Download — exclude _IMG_URL display field
     out_fields = list(run_fieldnames) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
     if use_bullets:
         out_fields.append("BULLET_POINTS")
