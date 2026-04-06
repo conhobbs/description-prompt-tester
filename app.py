@@ -5,6 +5,7 @@ import json
 import base64
 import time
 import threading
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -16,9 +17,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Default saved prompts ──────────────────────────────────────────────────────
+# ── Fallback default prompts (used if no sheet is connected) ───────────────────
 
-DEFAULT_PROMPTS = {
+FALLBACK_PROMPTS = {
     "Furniture": {
         "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description using the seller's text and product image provided.
 ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
@@ -48,7 +49,7 @@ CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose any
 
 PLACEMENT: Include functional placement context only when it is a factual attribute of the piece (e.g., outdoor-rated, room divider, dining height). Never suggest how a buyer should style or decorate with the item.
 
-VARIETY: Every description must read differently. Vary sentence structure, opening approach, and closing. Never default to 'suited to X interiors' or similar formulaic closings — let the item's most distinctive quality determine how the description ends.
+VARIETY: Every description must read differently. Vary sentence structure, opening approach, and closing. Never default to 'suited to X interiors' or similar formulaic closings.
 
 NEVER: 'Oriental' (use specific country), 'Primitive', urgency language, or collector superlatives (rare, important, museum quality)""",
         "bullets": """Write 3 sales-optimized bullet points for this item.
@@ -57,9 +58,9 @@ Rules:
 • Each bullet must be 100 characters or less
 • Order by what matters most to collectors and buyers
 • Include specific materials (e.g., solid walnut, travertine, cognac leather)
-• Explain why the item is notable or scarce
+• Explain why the item is notable
 • Include one key fact about the designer or manufacturer
-• Highlight what makes this piece superior to comparable items (materials, craftsmanship, originality, condition, provenance)
+• Highlight what makes this piece superior to comparable items
 
 Tone: Concise, authoritative, written for high-end design collectors. Avoid filler words and marketing fluff.
 
@@ -69,36 +70,33 @@ Output 3 bullet points only, one per line, starting with •"""
         "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a lighting item using the seller's text and product image provided.
 ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
 
-TONE: Mirror the seller's language exactly. Never add adjectives, superlatives, or embellishments the seller did not use. Avoid subjective claims like "warm glow," "creates ambiance," "statement piece." Every sentence should add factual value.
+TONE: Mirror the seller's language exactly. Avoid subjective claims like "warm glow," "creates ambiance," "statement piece." Every sentence should add factual value.
 
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters. No fluff, no filler, no marketing hyperbole.
+LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
 
-FORMAT: Establish fixture type, origin, and era early — but vary how you open. Complete sentences, third person.
+FORMAT: Establish fixture type, origin, and era early. Complete sentences, third person.
 
-SEO: Repeat the primary fixture type and key material naturally 2-3 times. The first 160 characters appear in search snippets — open with the most specific, keyword-rich sentence.
+SEO: Repeat the primary fixture type and key material naturally 2-3 times. Open with the most specific, keyword-rich sentence.
 
 ATTRIBUTION — use exactly one:
-By [Name] — documented (marks, labels, receipts)
+By [Name] — documented
 Attributed to [Name] — strong likelihood, no documentation
 In the style of [Name] — resembles design; also name the actual maker
 Never use 'Attributed to' or 'In the style of' for: Gabriella Crespi, Piero Fornasetti, Vladimir Kagan, Serge Mouille, Gino Sarfatti.
-For studio pieces: By [Designer] for [Manufacturer] (e.g., "By Achille Castiglioni for Flos").
+For studio pieces: By [Designer] for [Manufacturer].
 
 CONTENT — prioritize in this order:
-1. Materials — always specific ('patinated brass', 'mouth-blown opaline glass', 'spun aluminum', 'fabric shade')
+1. Materials — always specific ('patinated brass', 'mouth-blown opaline glass', 'spun aluminum')
 2. Electrical — whether rewired, socket type, wattage rating, cord length
-3. Condition — factual; note if original shade, hardware, or canopy is present or replaced
-4. Period and country of manufacture — both, if present
-5. Functional details — fixture type, number of bulbs, adjustability, mounting requirements, overall height, shade diameter
-Designer/manufacturer: include, but do not lead with or build the description around.
+3. Condition — note if original shade, hardware, or canopy is present or replaced
+4. Period and country of manufacture
+5. Fixture type, number of bulbs, adjustability, mounting, overall height, shade diameter
 
 CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose any rewiring or restoration explicitly.
 
-PLACEMENT: Include functional placement context only when factual (e.g., hardwired vs. plug-in, ceiling height required for pendant, UL-listed for damp locations). Never suggest mood or atmosphere.
+PLACEMENT: Include only factual placement context (hardwired vs. plug-in, ceiling height required, UL-listed for damp). Never suggest mood or atmosphere.
 
-VARIETY: Every description must read differently. Vary sentence structure, opening approach, and closing.
-
-NEVER: 'Oriental' (use specific country), urgency language, collector superlatives (rare, important, museum quality), or lighting atmosphere claims ('warm,' 'cozy,' 'dramatic').""",
+NEVER: 'Oriental', urgency language, collector superlatives, atmosphere claims ('warm,' 'cozy,' 'dramatic').""",
         "bullets": """Write 3 sales-optimized bullet points for this lighting item.
 
 Rules:
@@ -108,40 +106,34 @@ Rules:
 • Note if original shade or hardware is present
 • Avoid superlatives and unverifiable claims
 
-Tone: Concise, authoritative, written for high-end design collectors.
-
 Output 3 bullet points only, one per line, starting with •"""
     },
     "Rugs": {
-        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a rug item using the seller's text and product image provided.
+        "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a rug using the seller's text and product image provided.
 ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
 
-TONE: Mirror the seller's language exactly. Never add adjectives, superlatives, or embellishments the seller did not use. Avoid subjective claims like "stunning," "vibrant," "rich color." Every sentence should add factual value.
+TONE: Mirror the seller's language exactly. Avoid subjective claims like "stunning," "vibrant," "rich color." Every sentence should add factual value.
 
-LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters. No fluff, no filler, no marketing hyperbole.
+LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
 
-FORMAT: Establish rug type, origin, and era early — but vary how you open. Complete sentences, third person.
+FORMAT: Establish rug type, origin, and era early. Complete sentences, third person.
 
-SEO: Repeat the primary rug type and region of origin naturally 2-3 times. The first 160 characters appear in search snippets — open with the most specific, keyword-rich sentence.
+SEO: Repeat the primary rug type and region naturally 2-3 times. Open with the most specific, keyword-rich sentence.
 
-ATTRIBUTION: Rugs are attributed to region, workshop, or tribal group — not individual makers unless documented. Format as: [Region/Tribe] [type] (e.g., 'Tabriz carpet', 'Beni Ourain rug', 'Oushak runner'). If a workshop or designer is documented, use: By [Name].
+ATTRIBUTION: Attribute to region, workshop, or tribal group. Format: [Region/Tribe] [type] (e.g., 'Tabriz carpet', 'Beni Ourain rug'). If documented maker: By [Name].
 Never use 'Oriental' — always use the specific country or region.
 
 CONTENT — prioritize in this order:
-1. Construction — always specific: hand-knotted, hand-woven, flat-weave, hooked, tufted; wool pile, silk pile, wool on cotton, etc.
-2. Dimensions — always include if provided (width × length, pile height if noted)
-3. Condition — factual: pile wear level and location, fringe condition, any repairs, reweaving, color restoration, or moth damage
-4. Region and period — both, if present; note antique (100+ years) or vintage (20–99 years) where applicable
-5. Design — pattern type (geometric, floral, medallion, tribal, pictorial), field color, border description
-Knot count: include if provided — do not estimate.
+1. Construction — hand-knotted, hand-woven, flat-weave, hooked, tufted; pile material
+2. Dimensions — always include if provided
+3. Condition — pile wear, fringe condition, repairs, reweaving, moth damage
+4. Region and period — antique (100+ years) or vintage (20–99 years)
+5. Design — pattern type, field color, border description
+Knot count: include if provided, do not estimate.
 
-CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose any repairs, reweaving, or cleaning explicitly.
+CONDITION — use only: Distressed / Fair / Good / Excellent / New. Disclose repairs explicitly.
 
-PLACEMENT: Include functional placement context only when factual (e.g., runner format, outdoor-rated, specific dimensions). Never suggest room styling.
-
-VARIETY: Every description must read differently. Let the rug's most distinctive quality — construction, age, or provenance — determine how the description ends.
-
-NEVER: 'Oriental' (use specific country or region), 'Primitive', urgency language, collector superlatives (rare, important, museum quality), or color superlatives ('vibrant,' 'rich,' 'jewel-toned').""",
+NEVER: 'Oriental', 'Primitive', urgency language, collector superlatives, color superlatives ('vibrant,' 'rich,' 'jewel-toned').""",
         "bullets": """Write 3 sales-optimized bullet points for this rug.
 
 Rules:
@@ -151,21 +143,17 @@ Rules:
 • Note condition specifics (pile wear, repairs, fringe)
 • Avoid superlatives and color embellishments
 
-Tone: Concise, authoritative, written for high-end design collectors.
-
 Output 3 bullet points only, one per line, starting with •"""
     },
     "Jewelry": {
         "system": """You are a copywriter for 1stDibs, a luxury marketplace. Write a buyer-facing listing description for a jewelry item using the seller's text and product image provided.
 ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
 
-TONE: Mirror the seller's language exactly. Avoid subjective claims. Every sentence should add factual value.
-
 LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
 
-FORMAT: Establish item type, metal, and era early — but vary how you open. Complete sentences, third person.
+FORMAT: Establish item type, metal, and era early. Complete sentences, third person.
 
-SEO: Repeat the primary item descriptor and key material naturally 2-3 times. The first 160 characters appear in search snippets — open with the most specific, keyword-rich sentence.
+SEO: Repeat the primary item descriptor and key material naturally 2-3 times.
 
 ATTRIBUTION — use exactly one:
 By [Name] — documented (hallmarks, receipts, labels)
@@ -174,15 +162,14 @@ In the style of [Name] — resembles design; also name the actual maker
 
 CONTENT — prioritize in this order:
 1. Metal and gemstones — always specific (18k yellow gold, VS1 diamond, natural Burma ruby)
-2. Hallmarks, maker's marks, assay marks — if present
+2. Hallmarks, maker's marks, assay marks
 3. Condition — factual
 4. Period and country of manufacture
 5. Weight, dimensions, ring size if provided
-6. Provenance or collection history if available
 
 CONDITION — use only: Distressed / Fair / Good / Excellent / New.
 
-NEVER: urgency language, collector superlatives (rare, important, museum quality), unverifiable claims about stone quality.""",
+NEVER: urgency language, collector superlatives, unverifiable claims about stone quality.""",
         "bullets": """Write 3 sales-optimized bullet points for this jewelry item.
 
 Rules:
@@ -192,8 +179,6 @@ Rules:
 • Note any hallmarks, maker's marks, or provenance
 • Avoid superlatives and unverifiable claims
 
-Tone: Concise, authoritative, written for high-end design collectors.
-
 Output 3 bullet points only, one per line, starting with •"""
     },
     "Fine Art": {
@@ -201,8 +186,6 @@ Output 3 bullet points only, one per line, starting with •"""
 ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the image. Omit rather than guess. Output the description text only.
 
 LENGTH: Min 400 characters. For complex works with provenance, condition, and attribution all present, target 1,000+ characters. No filler.
-
-FORMAT: Establish work type, medium, and attribution early — but vary how you open. Complete sentences, third person.
 
 SEO: Repeat the primary descriptor and medium naturally 2-3 times. The first 160 characters appear in search snippets.
 
@@ -227,8 +210,6 @@ Rules:
 • Note exhibition history or publication if present
 • Avoid superlatives and unverifiable claims
 
-Tone: Concise, authoritative, written for high-end design collectors.
-
 Output 3 bullet points only, one per line, starting with •"""
     },
     "Fashion": {
@@ -237,11 +218,7 @@ ACCURACY IS CRITICAL. Use only facts from the seller's text or visible in the im
 
 LENGTH: Hard limits — minimum 400 characters, maximum 800 characters. Stop writing when you reach 800 characters.
 
-FORMAT: Establish item type, brand, and era early — but vary how you open. Complete sentences, third person.
-
-SEO: Repeat the primary item descriptor and brand naturally 2-3 times. The first 160 characters appear in search snippets.
-
-ATTRIBUTION: Fashion uses only 'By [Brand]' format. For designer-era pieces: 'By [Brand], designed by [Designer]' (e.g., 'By Gucci, designed by Tom Ford'). No 'Attributed to' or 'In the Style of'.
+ATTRIBUTION: Fashion uses only 'By [Brand]' format. For designer-era pieces: 'By [Brand], designed by [Designer]'. No 'Attributed to' or 'In the Style of'.
 
 CONTENT — prioritize in this order:
 1. Materials — always specific (100% cashmere, vegetable-tanned leather, silk charmeuse)
@@ -262,36 +239,76 @@ Rules:
 • Note hardware, lining, or construction details
 • Avoid superlatives and unverifiable claims
 
-Tone: Concise, authoritative, written for high-end design collectors.
-
 Output 3 bullet points only, one per line, starting with •"""
     }
 }
 
+# ── Google Sheets loader ───────────────────────────────────────────────────────
+
+def load_prompts_from_sheet(url):
+    """
+    Read prompts from a published Google Sheet CSV URL.
+    Expected columns: Name | System Prompt | Bullet Prompt
+    Returns (dict, error_message).
+    """
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("utf-8")
+        reader = csv.DictReader(io.StringIO(content))
+        prompts = {}
+        for row in reader:
+            name = row.get("Name", "").strip()
+            if name:
+                prompts[name] = {
+                    "system": row.get("System Prompt", "").strip(),
+                    "bullets": row.get("Bullet Prompt", "").strip()
+                }
+        if not prompts:
+            return None, "Sheet loaded but no prompts found. Check column names: Name, System Prompt, Bullet Prompt."
+        return prompts, None
+    except Exception as e:
+        return None, str(e)
+
+
 # ── Session state init ─────────────────────────────────────────────────────────
 
 if "saved_prompts" not in st.session_state:
-    st.session_state.saved_prompts = dict(DEFAULT_PROMPTS)
+    st.session_state.saved_prompts = dict(FALLBACK_PROMPTS)
 
 if "active_prompt_name" not in st.session_state:
     st.session_state.active_prompt_name = "Furniture"
 
 if "system_prompt" not in st.session_state:
-    st.session_state.system_prompt = DEFAULT_PROMPTS["Furniture"]["system"]
+    st.session_state.system_prompt = FALLBACK_PROMPTS["Furniture"]["system"]
 
 if "bullet_prompt" not in st.session_state:
-    st.session_state.bullet_prompt = DEFAULT_PROMPTS["Furniture"]["bullets"]
+    st.session_state.bullet_prompt = FALLBACK_PROMPTS["Furniture"]["bullets"]
 
-# ── API key: prefer Streamlit secret, fall back to sidebar input ───────────────
+if "sheet_loaded" not in st.session_state:
+    st.session_state.sheet_loaded = False
 
-def get_api_key():
-    """Return API key from Streamlit secrets if set, otherwise None."""
+# ── API key ────────────────────────────────────────────────────────────────────
+
+def get_secret(key):
     try:
-        return st.secrets["ANTHROPIC_API_KEY"]
+        return st.secrets[key]
     except Exception:
         return None
 
-secret_api_key = get_api_key()
+secret_api_key = get_secret("ANTHROPIC_API_KEY")
+secret_sheet_url = get_secret("PROMPTS_SHEET_URL")
+
+# Auto-load from sheet secret on first run
+if secret_sheet_url and not st.session_state.sheet_loaded:
+    loaded, err = load_prompts_from_sheet(secret_sheet_url)
+    if loaded:
+        st.session_state.saved_prompts = loaded
+        first_key = list(loaded.keys())[0]
+        st.session_state.active_prompt_name = first_key
+        st.session_state.system_prompt = loaded[first_key]["system"]
+        st.session_state.bullet_prompt = loaded[first_key].get("bullets", "")
+        st.session_state.sheet_loaded = True
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
@@ -303,29 +320,61 @@ st.caption("Test AI description prompts against real item data.")
 with st.sidebar:
     st.header("Configuration")
 
+    # API key
     if secret_api_key:
         api_key = secret_api_key
-        st.success("✓ API key loaded from settings")
+        st.success("✓ API key loaded")
     else:
-        api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            help="Your sk-ant-... key. Never stored or logged."
-        )
+        api_key = st.text_input("Anthropic API Key", type="password",
+                                help="Your sk-ant-... key.")
 
-    model = st.selectbox(
-        "Model",
+    model = st.selectbox("Model",
         options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-        index=0,
-        help="Opus = best quality. Sonnet = faster & cheaper. Haiku = fastest."
-    )
+        index=0)
 
     num_rows = st.slider("Rows to test", min_value=1, max_value=100, value=5)
     workers = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
 
     st.divider()
 
-    # ── Saved prompts ──────────────────────────────────────────────────────────
+    # ── Google Sheet sync ──────────────────────────────────────────────────────
+    st.subheader("Prompt Library (Google Sheets)")
+
+    if secret_sheet_url:
+        st.success("✓ Sheet connected via settings")
+        if st.button("🔄 Sync from sheet", use_container_width=True):
+            loaded, err = load_prompts_from_sheet(secret_sheet_url)
+            if loaded:
+                st.session_state.saved_prompts = loaded
+                st.success(f"Synced {len(loaded)} prompts from sheet.")
+                st.rerun()
+            else:
+                st.error(f"Sync failed: {err}")
+    else:
+        sheet_url_input = st.text_input(
+            "Paste your Google Sheet CSV URL",
+            placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv",
+            help="Publish your sheet as CSV and paste the URL here."
+        )
+        if st.button("Load from sheet", use_container_width=True):
+            if sheet_url_input.strip():
+                loaded, err = load_prompts_from_sheet(sheet_url_input.strip())
+                if loaded:
+                    st.session_state.saved_prompts = loaded
+                    first_key = list(loaded.keys())[0]
+                    st.session_state.active_prompt_name = first_key
+                    st.session_state.system_prompt = loaded[first_key]["system"]
+                    st.session_state.bullet_prompt = loaded[first_key].get("bullets", "")
+                    st.success(f"Loaded {len(loaded)} prompts. To make this permanent, add PROMPTS_SHEET_URL to your Streamlit secrets.")
+                    st.rerun()
+                else:
+                    st.error(f"Could not load sheet: {err}")
+            else:
+                st.warning("Paste a sheet URL first.")
+
+    st.divider()
+
+    # ── Prompt selector ────────────────────────────────────────────────────────
     st.subheader("Saved Prompts")
 
     prompt_names = list(st.session_state.saved_prompts.keys())
@@ -345,7 +394,7 @@ with st.sidebar:
     st.divider()
 
     new_prompt_name = st.text_input("Save current prompt as...",
-                                    placeholder="e.g. Lighting, Rugs, Seating")
+                                    placeholder="e.g. Seating, Decorative Objects")
     if st.button("Save prompt", use_container_width=True):
         if new_prompt_name.strip():
             st.session_state.saved_prompts[new_prompt_name.strip()] = {
@@ -361,13 +410,9 @@ with st.sidebar:
 
     st.caption("Export / import prompts")
     prompts_json = json.dumps(st.session_state.saved_prompts, indent=2)
-    st.download_button(
-        "⬇ Export prompts JSON",
-        data=prompts_json,
-        file_name="prompts.json",
-        mime="application/json",
-        use_container_width=True
-    )
+    st.download_button("⬇ Export prompts JSON", data=prompts_json,
+                       file_name="prompts.json", mime="application/json",
+                       use_container_width=True)
 
     uploaded_prompts = st.file_uploader("Import prompts JSON", type=["json"],
                                         label_visibility="collapsed")
@@ -433,9 +478,7 @@ with tab2:
             default_exclude = ["ITEM_IMAGE"]
             default_include = [c for c in fieldnames if c not in default_exclude]
             included_cols = st.multiselect(
-                "Columns",
-                options=fieldnames,
-                default=default_include,
+                "Columns", options=fieldnames, default=default_include,
                 label_visibility="collapsed"
             )
 
@@ -488,10 +531,8 @@ def build_item_context(row, cols):
 def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
                  inc_cols, img_col, mdl):
     notes = []
-    key = row.get("NATURAL_KEY", list(row.values())[0] if row else "unknown")
 
     raw_context = build_item_context(row, inc_cols)
-
     cleaned_context = raw_context
     for trigger in BOILERPLATE_TRIGGERS:
         if trigger.lower() in raw_context.lower():
@@ -528,9 +569,7 @@ def generate_row(client, row, sys_prompt, bullet_prompt_text, use_bullets,
         for attempt in range(3):
             try:
                 resp = client.messages.create(
-                    model=mdl,
-                    max_tokens=max_tok,
-                    system=sys,
+                    model=mdl, max_tokens=max_tok, system=sys,
                     messages=[{"role": "user", "content": user_content}]
                 )
                 return resp.content[0].text.strip()
@@ -607,10 +646,7 @@ if run_clicked and can_run:
             client, row,
             st.session_state.system_prompt,
             st.session_state.bullet_prompt,
-            use_bullets,
-            included_cols,
-            image_col,
-            model
+            use_bullets, included_cols, image_col, model
         )
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -675,10 +711,6 @@ if run_clicked and can_run:
     writer.writeheader()
     writer.writerows(results)
 
-    st.download_button(
-        "⬇ Download results CSV",
-        data=out_buffer.getvalue(),
-        file_name="prompt_test_results.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+    st.download_button("⬇ Download results CSV", data=out_buffer.getvalue(),
+                       file_name="prompt_test_results.csv", mime="text/csv",
+                       use_container_width=True)
