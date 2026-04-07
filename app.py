@@ -717,8 +717,8 @@ if run_clicked and can_run:
             if r["NOTES"]:
                 st.caption(f"📝 {r['NOTES']}")
 
-    # Download — exclude _IMG_URL display field
-    out_fields = list(run_fieldnames) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
+    # Download — only context cols sent to prompt + generated outputs
+    out_fields = list(run_cols) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
     if use_bullets and bool(bullet_prompt):
         out_fields.append("ITEM_HIGHLIGHTS")
     if use_suggestions:
