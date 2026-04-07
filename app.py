@@ -123,10 +123,11 @@ if "gsheet_loaded_name" not in st.session_state:
 if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = None
 
-if "col_selection" not in st.session_state:
-    st.session_state.col_selection = None  # None = use default (all non-image cols)
-
 BASIC_FIELDS = ["NATURAL_KEY", "IMAGE_URL", "ITEM_DESCRIPTION"]
+IMAGE_COLS   = ("ITEM_IMAGE", "IMAGE_URL")
+
+if "last_loaded_name" not in st.session_state:
+    st.session_state.last_loaded_name = None
 
 # Auto-load prompts on first run
 if secret_sheet_url and not st.session_state.sheet_loaded:
@@ -221,7 +222,6 @@ bullet_prompt = active_prompt.get("bullets", "")
 _configured_sheets = get_all_item_sheets()
 if st.session_state.active != st.session_state.last_prompt:
     st.session_state.last_prompt = st.session_state.active
-    st.session_state.col_selection = None  # reset column selection on prompt change
     if st.session_state.active in _configured_sheets:
         # Matching sheet exists — auto-load it
         _rows, _fns, _err = load_items_from_sheet(_configured_sheets[st.session_state.active])
@@ -278,7 +278,6 @@ with tab1:
 
 with tab2:
     st.subheader("Item Data")
-    configured_sheets = _configured_sheets
     data_source = st.radio("Source", ["📊 Google Sheet", "📂 Upload CSV"],
                            horizontal=True, label_visibility="collapsed")
 
@@ -289,31 +288,62 @@ with tab2:
 
     if data_source == "📊 Google Sheet":
 
-        if configured_sheets:
-            sheet_names = list(configured_sheets.keys())
-            # Default to the prompt-matching sheet if available, else first in list
-            default_idx = sheet_names.index(st.session_state.active) if st.session_state.active in sheet_names else 0
-            selected_name = st.selectbox("Select dataset", options=sheet_names,
-                                         index=default_idx, label_visibility="collapsed")
-            load_col, reload_col = st.columns([3, 1])
-            with load_col:
-                load_btn = st.button("Load sheet", type="primary", use_container_width=True)
-            with reload_col:
-                reload_btn = st.button("🔄", help="Reload current sheet", use_container_width=True,
-                                       disabled=(st.session_state.gsheet_loaded_name != selected_name))
+        if st.session_state.gsheet_rows:
+            fns = st.session_state.gsheet_fieldnames
 
-            if load_btn or reload_btn:
-                with st.spinner(f"Loading {selected_name}..."):
-                    loaded_rows, loaded_fns, err = load_items_from_sheet(configured_sheets[selected_name])
-                if loaded_rows:
-                    st.session_state.gsheet_rows = loaded_rows
-                    st.session_state.gsheet_fieldnames = loaded_fns
-                    st.session_state.gsheet_loaded_name = selected_name
-                    st.rerun()
-                else:
-                    st.error(f"Could not load: {err}")
+            # Status + reload button
+            col_status, col_reload = st.columns([5, 1])
+            with col_status:
+                st.success(f"✓ **{st.session_state.gsheet_loaded_name}** — {len(st.session_state.gsheet_rows)} rows, {len(fns)} columns")
+            with col_reload:
+                reload_url = _configured_sheets.get(st.session_state.gsheet_loaded_name)
+                if st.button("🔄", help="Reload sheet", use_container_width=True,
+                             disabled=not reload_url):
+                    with st.spinner("Reloading..."):
+                        _r, _f, _e = load_items_from_sheet(reload_url)
+                    if _r:
+                        st.session_state.gsheet_rows = _r
+                        st.session_state.gsheet_fieldnames = _f
+                        st.rerun()
+                    else:
+                        st.error(_e)
+
+            # Reset column selection when dataset changes
+            if st.session_state.last_loaded_name != st.session_state.gsheet_loaded_name:
+                st.session_state.last_loaded_name = st.session_state.gsheet_loaded_name
+                st.session_state["col_sel_gsheet"] = [c for c in fns if c not in IMAGE_COLS]
+
+            # Ensure key is initialised
+            if "col_sel_gsheet" not in st.session_state:
+                st.session_state["col_sel_gsheet"] = [c for c in fns if c not in IMAGE_COLS]
+
+            # Quick-select buttons — only affect the context columns multiselect
+            qs1, qs2 = st.columns(2)
+            with qs1:
+                if st.button("All fields", use_container_width=True, key="gs_all"):
+                    st.session_state["col_sel_gsheet"] = [c for c in fns if c not in IMAGE_COLS]
+            with qs2:
+                if st.button("Basic fields only", use_container_width=True, key="gs_basic"):
+                    st.session_state["col_sel_gsheet"] = [c for c in BASIC_FIELDS if c in fns]
+
+            included_cols = st.multiselect("Columns to pass as context",
+                                           options=fns, key="col_sel_gsheet")
+            image_col = st.selectbox(
+                "Image URL column (optional)",
+                options=["(none)"] + fns,
+                index=next((fns.index(c) + 1 for c in IMAGE_COLS if c in fns), 0)
+            )
+            rows       = st.session_state.gsheet_rows
+            fieldnames = fns
+            with st.expander("Preview first 3 rows"):
+                for r in rows[:3]:
+                    st.json({k: v for k, v in r.items() if k in included_cols})
+
         else:
-            st.caption("No item sheets configured in secrets. Add URLs under `[item_sheets]` to enable the dropdown.")
+            if st.session_state.active in _configured_sheets:
+                st.info(f"Switch to **{st.session_state.active}** triggered a load — if this persists, use the URL loader below.")
+            else:
+                st.warning(f"No dataset configured for **{st.session_state.active}**. Load one from a URL below, or switch to Upload CSV.")
 
         with st.expander("Load from a different URL"):
             manual_sheet_url = st.text_input(
@@ -335,36 +365,6 @@ with tab2:
                 else:
                     st.warning("Paste a sheet URL first.")
 
-        if st.session_state.gsheet_rows:
-            fns = st.session_state.gsheet_fieldnames
-            st.success(f"✓ **{st.session_state.gsheet_loaded_name}** — {len(st.session_state.gsheet_rows)} rows, {len(fns)} columns")
-
-            qs1, qs2 = st.columns(2)
-            with qs1:
-                if st.button("Select all fields", use_container_width=True, key="gs_all"):
-                    st.session_state.col_selection = [c for c in fns if c not in ("ITEM_IMAGE", "IMAGE_URL")]
-                    st.rerun()
-            with qs2:
-                if st.button("Basic fields only", use_container_width=True, key="gs_basic"):
-                    st.session_state.col_selection = [c for c in BASIC_FIELDS if c in fns]
-                    st.rerun()
-
-            default_include = st.session_state.col_selection if st.session_state.col_selection is not None \
-                              else [c for c in fns if c not in ("ITEM_IMAGE", "IMAGE_URL")]
-            included_cols = st.multiselect("Columns to pass as context",
-                                           options=fns, default=default_include,
-                                           key="col_sel_gsheet")
-            image_col = st.selectbox(
-                "Image URL column (optional)",
-                options=["(none)"] + fns,
-                index=next((fns.index(c) + 1 for c in ("ITEM_IMAGE", "IMAGE_URL") if c in fns), 0)
-            )
-            rows       = st.session_state.gsheet_rows
-            fieldnames = fns
-            with st.expander("Preview first 3 rows"):
-                for r in rows[:3]:
-                    st.json({k: v for k, v in r.items() if k in included_cols})
-
     else:  # Upload CSV
         uploaded_file = st.file_uploader("Upload CSV", type=["csv"],
                                          label_visibility="collapsed")
@@ -376,21 +376,19 @@ with tab2:
                 fieldnames = list(reader.fieldnames)
                 st.success(f"✓ {len(rows)} rows — {len(fieldnames)} columns detected")
 
+                if "col_sel_csv" not in st.session_state:
+                    st.session_state["col_sel_csv"] = [c for c in fieldnames if c not in IMAGE_COLS]
+
                 qs1, qs2 = st.columns(2)
                 with qs1:
-                    if st.button("Select all fields", use_container_width=True, key="csv_all"):
-                        st.session_state.col_selection = [c for c in fieldnames if c not in ("ITEM_IMAGE", "IMAGE_URL")]
-                        st.rerun()
+                    if st.button("All fields", use_container_width=True, key="csv_all"):
+                        st.session_state["col_sel_csv"] = [c for c in fieldnames if c not in IMAGE_COLS]
                 with qs2:
                     if st.button("Basic fields only", use_container_width=True, key="csv_basic"):
-                        st.session_state.col_selection = [c for c in BASIC_FIELDS if c in fieldnames]
-                        st.rerun()
+                        st.session_state["col_sel_csv"] = [c for c in BASIC_FIELDS if c in fieldnames]
 
-                default_include = st.session_state.col_selection if st.session_state.col_selection is not None \
-                                  else [c for c in fieldnames if c not in ("ITEM_IMAGE", "IMAGE_URL")]
                 included_cols = st.multiselect("Columns to pass as context",
-                                               options=fieldnames, default=default_include,
-                                               key="col_sel_csv")
+                                               options=fieldnames, key="col_sel_csv")
                 image_col = st.selectbox(
                     "Image URL column (optional)",
                     options=["(none)"] + fieldnames,
