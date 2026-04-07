@@ -120,6 +120,14 @@ if "gsheet_fieldnames" not in st.session_state:
 if "gsheet_loaded_name" not in st.session_state:
     st.session_state.gsheet_loaded_name = None
 
+if "last_prompt" not in st.session_state:
+    st.session_state.last_prompt = None
+
+if "col_selection" not in st.session_state:
+    st.session_state.col_selection = None  # None = use default (all non-image cols)
+
+BASIC_FIELDS = ["NATURAL_KEY", "IMAGE_URL", "ITEM_DESCRIPTION"]
+
 # Auto-load prompts on first run
 if secret_sheet_url and not st.session_state.sheet_loaded:
     loaded, err = load_prompts_from_sheet(secret_sheet_url)
@@ -208,6 +216,29 @@ active_prompt = st.session_state.prompts.get(st.session_state.active, {})
 system_prompt = active_prompt.get("system", "")
 bullet_prompt = active_prompt.get("bullets", "")
 
+# ── Prompt-change → auto-sync dataset ─────────────────────────────────────────
+
+_configured_sheets = get_all_item_sheets()
+if st.session_state.active != st.session_state.last_prompt:
+    st.session_state.last_prompt = st.session_state.active
+    st.session_state.col_selection = None  # reset column selection on prompt change
+    if st.session_state.active in _configured_sheets:
+        # Matching sheet exists — auto-load it
+        _rows, _fns, _err = load_items_from_sheet(_configured_sheets[st.session_state.active])
+        if _rows:
+            st.session_state.gsheet_rows = _rows
+            st.session_state.gsheet_fieldnames = _fns
+            st.session_state.gsheet_loaded_name = st.session_state.active
+        else:
+            st.session_state.gsheet_rows = []
+            st.session_state.gsheet_fieldnames = []
+            st.session_state.gsheet_loaded_name = None
+    else:
+        # No matching sheet — clear loaded data
+        st.session_state.gsheet_rows = []
+        st.session_state.gsheet_fieldnames = []
+        st.session_state.gsheet_loaded_name = None
+
 # ── Manual-entry field definitions ────────────────────────────────────────────
 
 MANUAL_FIELDNAMES = [
@@ -227,17 +258,17 @@ with tab1:
                  disabled=True, label_visibility="collapsed")
     st.caption(f"{len(system_prompt)} characters  ·  Edit in Google Sheets")
 
-    enable_bullets     = st.toggle("Enable bullet point prompt", value=bool(bullet_prompt))
+    enable_bullets     = st.toggle("Enable Item Highlights", value=bool(bullet_prompt))
     enable_suggestions = st.toggle("Enable Smart Suggestions", value=True,
                                    help="Adds a seller-facing column flagging missing information that would improve the listing.")
 
     if enable_bullets and bullet_prompt:
-        st.subheader("Bullet Point Prompt")
+        st.subheader("Item Highlights Prompt")
         st.text_area("bullets_preview", value=bullet_prompt, height=150,
                      disabled=True, label_visibility="collapsed")
         st.caption(f"{len(bullet_prompt)} characters  ·  Edit in Google Sheets")
     elif enable_bullets and not bullet_prompt:
-        st.info("No bullet prompt found for this vertical. Add a 'Bullet Prompt' column to your sheet.")
+        st.info("No Item Highlights prompt found for this vertical. Add a 'Bullet Prompt' column to your sheet.")
 
     if enable_suggestions:
         with st.expander("Smart Suggestions prompt (read-only)"):
@@ -247,7 +278,7 @@ with tab1:
 
 with tab2:
     st.subheader("Item Data")
-    configured_sheets = get_all_item_sheets()
+    configured_sheets = _configured_sheets
     data_source = st.radio("Source", ["📊 Google Sheet", "📂 Upload CSV"],
                            horizontal=True, label_visibility="collapsed")
 
@@ -259,9 +290,11 @@ with tab2:
     if data_source == "📊 Google Sheet":
 
         if configured_sheets:
-            sheet_names   = list(configured_sheets.keys())
+            sheet_names = list(configured_sheets.keys())
+            # Default to the prompt-matching sheet if available, else first in list
+            default_idx = sheet_names.index(st.session_state.active) if st.session_state.active in sheet_names else 0
             selected_name = st.selectbox("Select dataset", options=sheet_names,
-                                         label_visibility="collapsed")
+                                         index=default_idx, label_visibility="collapsed")
             load_col, reload_col = st.columns([3, 1])
             with load_col:
                 load_btn = st.button("Load sheet", type="primary", use_container_width=True)
@@ -305,13 +338,26 @@ with tab2:
         if st.session_state.gsheet_rows:
             fns = st.session_state.gsheet_fieldnames
             st.success(f"✓ **{st.session_state.gsheet_loaded_name}** — {len(st.session_state.gsheet_rows)} rows, {len(fns)} columns")
-            default_include = [c for c in fns if c not in ("ITEM_IMAGE",)]
+
+            qs1, qs2 = st.columns(2)
+            with qs1:
+                if st.button("Select all fields", use_container_width=True, key="gs_all"):
+                    st.session_state.col_selection = [c for c in fns if c not in ("ITEM_IMAGE", "IMAGE_URL")]
+                    st.rerun()
+            with qs2:
+                if st.button("Basic fields only", use_container_width=True, key="gs_basic"):
+                    st.session_state.col_selection = [c for c in BASIC_FIELDS if c in fns]
+                    st.rerun()
+
+            default_include = st.session_state.col_selection if st.session_state.col_selection is not None \
+                              else [c for c in fns if c not in ("ITEM_IMAGE", "IMAGE_URL")]
             included_cols = st.multiselect("Columns to pass as context",
-                                           options=fns, default=default_include)
+                                           options=fns, default=default_include,
+                                           key="col_sel_gsheet")
             image_col = st.selectbox(
                 "Image URL column (optional)",
                 options=["(none)"] + fns,
-                index=fns.index("ITEM_IMAGE") + 1 if "ITEM_IMAGE" in fns else 0
+                index=next((fns.index(c) + 1 for c in ("ITEM_IMAGE", "IMAGE_URL") if c in fns), 0)
             )
             rows       = st.session_state.gsheet_rows
             fieldnames = fns
@@ -329,13 +375,26 @@ with tab2:
                 rows       = list(reader)
                 fieldnames = list(reader.fieldnames)
                 st.success(f"✓ {len(rows)} rows — {len(fieldnames)} columns detected")
-                default_include = [c for c in fieldnames if c not in ("ITEM_IMAGE",)]
+
+                qs1, qs2 = st.columns(2)
+                with qs1:
+                    if st.button("Select all fields", use_container_width=True, key="csv_all"):
+                        st.session_state.col_selection = [c for c in fieldnames if c not in ("ITEM_IMAGE", "IMAGE_URL")]
+                        st.rerun()
+                with qs2:
+                    if st.button("Basic fields only", use_container_width=True, key="csv_basic"):
+                        st.session_state.col_selection = [c for c in BASIC_FIELDS if c in fieldnames]
+                        st.rerun()
+
+                default_include = st.session_state.col_selection if st.session_state.col_selection is not None \
+                                  else [c for c in fieldnames if c not in ("ITEM_IMAGE", "IMAGE_URL")]
                 included_cols = st.multiselect("Columns to pass as context",
-                                               options=fieldnames, default=default_include)
+                                               options=fieldnames, default=default_include,
+                                               key="col_sel_csv")
                 image_col = st.selectbox(
                     "Image URL column (optional)",
                     options=["(none)"] + fieldnames,
-                    index=fieldnames.index("ITEM_IMAGE") + 1 if "ITEM_IMAGE" in fieldnames else 0
+                    index=next((fieldnames.index(c) + 1 for c in ("ITEM_IMAGE", "IMAGE_URL") if c in fieldnames), 0)
                 )
                 with st.expander("Preview first 3 rows"):
                     for r in rows[:3]:
@@ -520,7 +579,7 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
     result = dict(row)
     result["NEW_DESCRIPTION"]   = new_desc
     result["CHAR_COUNT"]        = char_len
-    result["BULLET_POINTS"]     = new_bullets
+    result["ITEM_HIGHLIGHTS"]     = new_bullets
     result["SMART_SUGGESTIONS"] = new_suggestions
     result["NOTES"]             = " | ".join(notes) if notes else ""
     result["_IMG_URL"]          = img_url_for_display
@@ -642,9 +701,9 @@ if run_clicked and can_run:
                 st.markdown("**New description**")
                 st.write(r.get("NEW_DESCRIPTION", "") or "_empty_")
 
-            if use_bullets and r.get("BULLET_POINTS"):
-                st.markdown("**Bullet points**")
-                st.write(r["BULLET_POINTS"])
+            if use_bullets and r.get("ITEM_HIGHLIGHTS"):
+                st.markdown("**✨ Item Highlights**")
+                st.info(r["ITEM_HIGHLIGHTS"])
 
             if use_suggestions and r.get("SMART_SUGGESTIONS"):
                 st.markdown("**💡 Smart Suggestions**")
@@ -655,8 +714,8 @@ if run_clicked and can_run:
 
     # Download — exclude _IMG_URL display field
     out_fields = list(run_fieldnames) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
-    if use_bullets:
-        out_fields.append("BULLET_POINTS")
+    if use_bullets and bool(bullet_prompt):
+        out_fields.append("ITEM_HIGHLIGHTS")
     if use_suggestions:
         out_fields.append("SMART_SUGGESTIONS")
     out_fields.append("NOTES")
