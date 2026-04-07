@@ -150,9 +150,14 @@ with st.sidebar:
     # Prompt selector at top as dropdown
     st.subheader("Prompt")
     prompt_names = list(st.session_state.prompts.keys())
-    idx = prompt_names.index(st.session_state.active) if st.session_state.active in prompt_names else 0
-    selected = st.selectbox("Select prompt", options=prompt_names, index=idx,
-                            label_visibility="collapsed")
+    # Initialise the widget key from session state (only on first render)
+    if "prompt_select" not in st.session_state:
+        st.session_state["prompt_select"] = st.session_state.active
+    # If current value is stale (e.g. after a prompt sync), realign
+    if st.session_state["prompt_select"] not in prompt_names:
+        st.session_state["prompt_select"] = prompt_names[0]
+    selected = st.selectbox("Select prompt", options=prompt_names,
+                            key="prompt_select", label_visibility="collapsed")
     st.session_state.active = selected
 
     st.divider()
@@ -167,6 +172,7 @@ with st.sidebar:
                 st.session_state.prompts = loaded
                 if st.session_state.active not in loaded:
                     st.session_state.active = list(loaded.keys())[0]
+                    st.session_state["prompt_select"] = st.session_state.active
                 st.success(f"Synced {len(loaded)} prompts.")
                 st.rerun()
             else:
@@ -182,6 +188,7 @@ with st.sidebar:
                 if loaded:
                     st.session_state.prompts = loaded
                     st.session_state.active = list(loaded.keys())[0]
+                    st.session_state["prompt_select"] = st.session_state.active
                     st.success(f"Loaded {len(loaded)} prompts.")
                     st.info("Add PROMPTS_SHEET_URL to Streamlit secrets to make this permanent.")
                     st.rerun()
