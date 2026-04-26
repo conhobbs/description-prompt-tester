@@ -628,15 +628,23 @@ with tab4:
                 )
                 try:
                     judge_resp = ab_client.messages.create(
-                        model=ab_model, max_tokens=300, system=JUDGE_SYSTEM,
-                        messages=[{"role": "user", "content": judge_content}]
+                        model=ab_model, max_tokens=400, system=JUDGE_SYSTEM,
+                        messages=[
+                            {"role": "user", "content": judge_content},
+                            {"role": "assistant", "content": "{"}  # prefill forces JSON
+                        ]
                     )
-                    raw = judge_resp.content[0].text.strip()
-                    # Strip markdown fences if model adds them
-                    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
-                    verdict = json.loads(raw)
+                    raw = "{" + judge_resp.content[0].text.strip()
+                    # Extract just the JSON object in case there's surrounding text
+                    match = re.search(r'\{.*\}', raw, re.DOTALL)
+                    if match:
+                        verdict = json.loads(match.group())
+                    else:
+                        raise ValueError(f"No JSON found in response: {raw[:200]}")
                 except Exception as e:
                     verdict = {"winner": "error", "confidence": "—", "reason": str(e),
+                               "accuracy_a": "", "accuracy_issue_a": "",
+                               "accuracy_b": "", "accuracy_issue_b": "",
                                "a_notes": "", "b_notes": ""}
  
                 # Un-flip the winner back to real A/B labels
