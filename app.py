@@ -8,28 +8,29 @@ import random
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+ 
 import re
 import requests
 import anthropic
-
+import streamlit.components.v1 as components
+ 
 st.set_page_config(
     page_title="1stDibs Prompt Tester",
     page_icon="🪑",
     layout="wide"
 )
-
+ 
 # ── Fallback prompts ───────────────────────────────────────────────────────────
-
+ 
 FALLBACK_PROMPTS = {
     "Furniture": {
         "system": "Fallback: connect a Google Sheet to load your prompts.",
         "bullets": ""
     }
 }
-
+ 
 # ── Smart Suggestions prompt ───────────────────────────────────────────────────
-
+ 
 SUGGESTIONS_SYSTEM = """You are a luxury product specialist for 1stDibs. \
 Review the seller's item data and the generated listing description. \
 Identify 2–4 specific facts the seller should add to meaningfully improve their listing. \
@@ -39,9 +40,50 @@ Be concrete and seller-facing — start each point with an action verb \
 "Specify whether the marble top is original", "Confirm country of origin"). \
 Only flag genuinely missing information that would materially help a buyer. \
 Return a short bulleted list only — no preamble, no explanation."""
-
+ 
+# ── Judge prompt ──────────────────────────────────────────────────────────────
+ 
+JUDGE_SYSTEM = """You are an expert evaluator for 1stDibs luxury marketplace listing descriptions.
+You will be shown two descriptions (A and B) generated from the same seller item data.
+ 
+## STEP 1 — ACCURACY GATE (mandatory, evaluated first)
+Check each description strictly against the item data provided.
+A description AUTOMATICALLY LOSES if it:
+- States any fact not present in the seller's text or clearly visible in the image
+- Implies a material, origin, period, maker, or condition detail that was not provided
+- Uses hedging to introduce unverifiable claims (e.g. "likely", "appears to be", "possibly")
+ 
+This is a hard disqualifier. A description that invents or infers facts creates legal risk
+("not as described" claims) and must lose regardless of how well it scores on other criteria.
+If BOTH descriptions fail the accuracy gate, set winner to "tie" and explain in the reason.
+ 
+## STEP 2 — QUALITY CRITERIA (only if accuracy gate is passed)
+Evaluate on:
+- TONE: mirrors the seller's language, no added adjectives, superlatives, or filler phrases
+- LENGTH: ideally 400–800 characters
+- SEO: primary item descriptor and key material repeated naturally 2–3 times, strong opening 160 chars
+- ATTRIBUTION: exactly one of: By [Name] / Attributed to [Name] / In the style of [Name]
+- FORBIDDEN: no 'Oriental', 'Primitive', urgency language, or collector superlatives
+- CONTENT: prioritises materials, condition, period/country, functional details
+ 
+## OUTPUT
+Return ONLY a valid JSON object — no markdown, no extra text:
+{
+  "accuracy_a": "pass" or "fail",
+  "accuracy_b": "pass" or "fail",
+  "accuracy_issue_a": "describe any invented fact, or empty string if pass",
+  "accuracy_issue_b": "describe any invented fact, or empty string if pass",
+  "winner": "A" or "B" or "tie",
+  "confidence": "high" or "medium" or "low",
+  "reason": "one concise sentence — lead with accuracy if that decided it",
+  "a_notes": "brief strength or weakness of A",
+  "b_notes": "brief strength or weakness of B"
+}
+ 
+Be decisive. Only use "tie" if descriptions are genuinely equivalent."""
+ 
 # ── Google Sheets loaders ──────────────────────────────────────────────────────
-
+ 
 def _fetch_sheet_csv(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -49,8 +91,8 @@ def _fetch_sheet_csv(url):
             return resp.read().decode("utf-8"), None
     except Exception as e:
         return None, str(e)
-
-
+ 
+ 
 def load_prompts_from_sheet(url):
     text, err = _fetch_sheet_csv(url)
     if err:
@@ -67,8 +109,8 @@ def load_prompts_from_sheet(url):
     if not prompts:
         return None, "Sheet loaded but no prompts found. Check column headers: Name | System Prompt | Bullet Prompt"
     return prompts, None
-
-
+ 
+ 
 def load_items_from_sheet(url):
     text, err = _fetch_sheet_csv(url)
     if err:
@@ -78,57 +120,60 @@ def load_items_from_sheet(url):
     if not rows:
         return None, None, "Sheet loaded but contains no rows."
     return rows, list(reader.fieldnames), None
-
-
+ 
+ 
 # ── Secrets helpers ────────────────────────────────────────────────────────────
-
+ 
 def get_secret(key):
     try:
         return st.secrets[key]
     except Exception:
         return None
-
+ 
 def get_all_item_sheets():
     try:
         return dict(st.secrets["item_sheets"])
     except Exception:
         return {}
-
+ 
 secret_api_key   = get_secret("ANTHROPIC_API_KEY")
 secret_sheet_url = get_secret("PROMPTS_SHEET_URL")
-
+ 
 # ── Session state init ─────────────────────────────────────────────────────────
-
+ 
 if "prompts" not in st.session_state:
     st.session_state.prompts = dict(FALLBACK_PROMPTS)
-
+ 
 if "active" not in st.session_state:
     st.session_state.active = list(FALLBACK_PROMPTS.keys())[0]
-
+ 
 if "sheet_loaded" not in st.session_state:
     st.session_state.sheet_loaded = False
-
+ 
 if "manual_rows" not in st.session_state:
     st.session_state.manual_rows = []
-
+ 
 if "gsheet_rows" not in st.session_state:
     st.session_state.gsheet_rows = []
-
+ 
 if "gsheet_fieldnames" not in st.session_state:
     st.session_state.gsheet_fieldnames = []
-
+ 
 if "gsheet_loaded_name" not in st.session_state:
     st.session_state.gsheet_loaded_name = None
-
+ 
 if "last_prompt" not in st.session_state:
     st.session_state.last_prompt = None
-
+ 
 BASIC_FIELDS = ["NATURAL_KEY", "IMAGE_URL", "ITEM_DESCRIPTION"]
 IMAGE_COLS   = ("ITEM_IMAGE", "IMAGE_URL")
-
+ 
 if "last_loaded_name" not in st.session_state:
     st.session_state.last_loaded_name = None
-
+ 
+if "ab_results" not in st.session_state:
+    st.session_state.ab_results = []
+ 
 # Auto-load prompts on first run
 if secret_sheet_url and not st.session_state.sheet_loaded:
     loaded, err = load_prompts_from_sheet(secret_sheet_url)
@@ -136,17 +181,17 @@ if secret_sheet_url and not st.session_state.sheet_loaded:
         st.session_state.prompts = loaded
         st.session_state.active = list(loaded.keys())[0]
         st.session_state.sheet_loaded = True
-
+ 
 # ── Header ─────────────────────────────────────────────────────────────────────
-
+ 
 st.title("🪑 1stDibs Prompt Tester")
 st.caption("Select a prompt, load item data, and run.")
-
+ 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-
+ 
 with st.sidebar:
     st.header("Configuration")
-
+ 
     # Prompt selector at top as dropdown
     st.subheader("Prompt")
     prompt_names = list(st.session_state.prompts.keys())
@@ -159,9 +204,9 @@ with st.sidebar:
     selected = st.selectbox("Select prompt", options=prompt_names,
                             key="prompt_select", label_visibility="collapsed")
     st.session_state.active = selected
-
+ 
     st.divider()
-
+ 
     # Prompt Library
     st.subheader("Prompt Library")
     if secret_sheet_url:
@@ -196,36 +241,36 @@ with st.sidebar:
                     st.error(f"Could not load: {err}")
             else:
                 st.warning("Paste a sheet URL first.")
-
+ 
     st.divider()
-
+ 
     # Run settings
     st.subheader("Run Settings")
-
+ 
     if secret_api_key:
         api_key = secret_api_key
     else:
         api_key = st.text_input("Anthropic API Key", type="password",
                                 help="Your sk-ant-... key.")
-
+ 
     model = st.selectbox("Model",
         options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
         index=0,
         help="Opus = best quality. Sonnet = faster & cheaper."
     )
-
+ 
     num_rows    = st.slider("Rows to test", min_value=1, max_value=100, value=5)
     sample_mode = st.radio("Row selection", ["From top", "Random sample"], horizontal=True)
     workers     = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
-
+ 
 # ── Active prompt ──────────────────────────────────────────────────────────────
-
+ 
 active_prompt = st.session_state.prompts.get(st.session_state.active, {})
 system_prompt = active_prompt.get("system", "")
 bullet_prompt = active_prompt.get("bullets", "")
-
+ 
 # ── Prompt-change → auto-sync dataset ─────────────────────────────────────────
-
+ 
 _configured_sheets = get_all_item_sheets()
 if st.session_state.active != st.session_state.last_prompt:
     st.session_state.last_prompt = st.session_state.active
@@ -245,30 +290,30 @@ if st.session_state.active != st.session_state.last_prompt:
         st.session_state.gsheet_rows = []
         st.session_state.gsheet_fieldnames = []
         st.session_state.gsheet_loaded_name = None
-
+ 
 # ── Manual-entry field definitions ────────────────────────────────────────────
-
+ 
 MANUAL_FIELDNAMES = [
     "NATURAL_KEY", "ITEM_TITLE", "ITEM_DESCRIPTION", "CATEGORY",
     "CREATOR", "MATERIALS", "CONDITION", "PERIOD", "ORIGIN",
     "ITEM_IMAGE", "SOURCE_URL"
 ]
 MANUAL_CONTEXT_COLS = [f for f in MANUAL_FIELDNAMES if f not in ("ITEM_IMAGE", "SOURCE_URL")]
-
+ 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
-
-tab1, tab2, tab3 = st.tabs(["📝 Prompt Preview", "📊 Item Data", "✍️ Quick Entry"])
-
+ 
+tab1, tab2, tab3, tab4 = st.tabs(["📝 Prompt Preview", "📊 Item Data", "✍️ Quick Entry", "⚖️ A/B Compare"])
+ 
 with tab1:
     st.subheader(f"{st.session_state.active} — System Prompt")
     st.text_area("system_preview", value=system_prompt, height=300,
                  disabled=True, label_visibility="collapsed")
     st.caption(f"{len(system_prompt)} characters  ·  Edit in Google Sheets")
-
+ 
     enable_bullets     = st.toggle("Enable Item Highlights", value=bool(bullet_prompt))
     enable_suggestions = st.toggle("Enable Smart Suggestions", value=True,
                                    help="Adds a seller-facing column flagging missing information that would improve the listing.")
-
+ 
     if enable_bullets and bullet_prompt:
         st.subheader("Item Highlights Prompt")
         st.text_area("bullets_preview", value=bullet_prompt, height=150,
@@ -276,28 +321,28 @@ with tab1:
         st.caption(f"{len(bullet_prompt)} characters  ·  Edit in Google Sheets")
     elif enable_bullets and not bullet_prompt:
         st.info("No Item Highlights prompt found for this vertical. Add a 'Bullet Prompt' column to your sheet.")
-
+ 
     if enable_suggestions:
         with st.expander("Smart Suggestions prompt (read-only)"):
             st.text_area("suggestions_preview", value=SUGGESTIONS_SYSTEM, height=160,
                          disabled=True, label_visibility="collapsed")
-
-
+ 
+ 
 with tab2:
     st.subheader("Item Data")
     data_source = st.radio("Source", ["📊 Google Sheet", "📂 Upload CSV"],
                            horizontal=True, label_visibility="collapsed")
-
+ 
     rows          = []
     fieldnames    = []
     included_cols = []
     image_col     = "(none)"
-
+ 
     if data_source == "📊 Google Sheet":
-
+ 
         if st.session_state.gsheet_rows:
             fns = st.session_state.gsheet_fieldnames
-
+ 
             # Status + reload button
             col_status, col_reload = st.columns([5, 1])
             with col_status:
@@ -314,16 +359,16 @@ with tab2:
                         st.rerun()
                     else:
                         st.error(_e)
-
+ 
             # Reset column selection when dataset changes
             if st.session_state.last_loaded_name != st.session_state.gsheet_loaded_name:
                 st.session_state.last_loaded_name = st.session_state.gsheet_loaded_name
                 st.session_state["col_sel_gsheet"] = [c for c in fns if c not in IMAGE_COLS]
-
+ 
             # Ensure key is initialised
             if "col_sel_gsheet" not in st.session_state:
                 st.session_state["col_sel_gsheet"] = [c for c in fns if c not in IMAGE_COLS]
-
+ 
             # Quick-select buttons — only affect the context columns multiselect
             qs1, qs2 = st.columns(2)
             with qs1:
@@ -332,7 +377,7 @@ with tab2:
             with qs2:
                 if st.button("Basic fields only", use_container_width=True, key="gs_basic"):
                     st.session_state["col_sel_gsheet"] = [c for c in BASIC_FIELDS if c in fns]
-
+ 
             included_cols = st.multiselect("Columns to pass as context",
                                            options=fns, key="col_sel_gsheet")
             image_col = st.selectbox(
@@ -345,13 +390,13 @@ with tab2:
             with st.expander("Preview first 3 rows"):
                 for r in rows[:3]:
                     st.json({k: v for k, v in r.items() if k in included_cols})
-
+ 
         else:
             if st.session_state.active in _configured_sheets:
                 st.info(f"Switch to **{st.session_state.active}** triggered a load — if this persists, use the URL loader below.")
             else:
                 st.warning(f"No dataset configured for **{st.session_state.active}**. Load one from a URL below, or switch to Upload CSV.")
-
+ 
         with st.expander("Load from a different URL"):
             manual_sheet_url = st.text_input(
                 "Sheet URL",
@@ -371,7 +416,7 @@ with tab2:
                         st.error(f"Could not load: {err}")
                 else:
                     st.warning("Paste a sheet URL first.")
-
+ 
     else:  # Upload CSV
         uploaded_file = st.file_uploader("Upload CSV", type=["csv"],
                                          label_visibility="collapsed")
@@ -382,10 +427,10 @@ with tab2:
                 rows       = list(reader)
                 fieldnames = list(reader.fieldnames)
                 st.success(f"✓ {len(rows)} rows — {len(fieldnames)} columns detected")
-
+ 
                 if "col_sel_csv" not in st.session_state:
                     st.session_state["col_sel_csv"] = [c for c in fieldnames if c not in IMAGE_COLS]
-
+ 
                 qs1, qs2 = st.columns(2)
                 with qs1:
                     if st.button("All fields", use_container_width=True, key="csv_all"):
@@ -393,7 +438,7 @@ with tab2:
                 with qs2:
                     if st.button("Basic fields only", use_container_width=True, key="csv_basic"):
                         st.session_state["col_sel_csv"] = [c for c in BASIC_FIELDS if c in fieldnames]
-
+ 
                 included_cols = st.multiselect("Columns to pass as context",
                                                options=fieldnames, key="col_sel_csv")
                 image_col = st.selectbox(
@@ -406,12 +451,12 @@ with tab2:
                         st.json({k: v for k, v in r.items() if k in included_cols})
             except Exception as e:
                 st.error(f"Error reading CSV: {e}")
-
-
+ 
+ 
 with tab3:
     st.subheader("Quick Entry")
     st.caption("Paste details from a single item to test quickly. Only Description is required.")
-
+ 
     with st.form("manual_entry_form"):
         me_title       = st.text_input("Item title")
         me_url         = st.text_input("Item URL (for reference)")
@@ -426,7 +471,7 @@ with tab3:
         me_origin      = st.text_input("Country / Origin")
         me_image       = st.text_input("Image URL (optional)")
         add_clicked    = st.form_submit_button("➕ Add to queue", type="primary")
-
+ 
     if add_clicked:
         if not me_description.strip():
             st.warning("Seller description is required.")
@@ -447,7 +492,7 @@ with tab3:
             }
             st.session_state.manual_rows.append(new_row)
             st.success(f"✓ Added — {len(st.session_state.manual_rows)} item(s) in queue")
-
+ 
     if st.session_state.manual_rows:
         st.divider()
         col_info, col_clear = st.columns([4, 1])
@@ -462,16 +507,256 @@ with tab3:
                 label = r.get("ITEM_TITLE") or r.get("NATURAL_KEY")
                 st.markdown(f"**{label}**")
                 st.json({k: v for k, v in r.items() if v and k != "ITEM_IMAGE"})
-
-
+ 
+ 
+with tab4:
+    st.subheader("A/B Prompt Comparison")
+    st.caption("Run the same items through two prompts and let the judge pick the winner.")
+ 
+    prompt_names_ab = list(st.session_state.prompts.keys())
+ 
+    if len(prompt_names_ab) < 2:
+        st.warning("You need at least two prompts loaded to run a comparison.")
+    else:
+        ab_col1, ab_col2 = st.columns(2)
+        with ab_col1:
+            prompt_a_name = st.selectbox("Prompt A", options=prompt_names_ab, index=0, key="ab_prompt_a")
+        with ab_col2:
+            remaining = [p for p in prompt_names_ab if p != prompt_a_name]
+            prompt_b_name = st.selectbox("Prompt B", options=prompt_names_ab,
+                                         index=min(1, len(prompt_names_ab) - 1), key="ab_prompt_b")
+ 
+        if prompt_a_name == prompt_b_name:
+            st.warning("Select two different prompts to compare.")
+ 
+        ab_num_rows = st.slider("Items to compare", min_value=1, max_value=50, value=5, key="ab_num_rows")
+        ab_sample   = st.radio("Row selection", ["From top", "Random sample"],
+                               horizontal=True, key="ab_sample")
+        ab_model    = st.selectbox("Judge model",
+                                   options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+                                   index=1, key="ab_model",
+                                   help="Sonnet is a good balance of quality and speed for judging.")
+ 
+        # Data source info
+        if st.session_state.gsheet_rows:
+            st.info(f"Will use **{st.session_state.gsheet_loaded_name}** dataset ({len(st.session_state.gsheet_rows)} rows)")
+        elif st.session_state.manual_rows:
+            st.info(f"Will use Quick Entry queue ({len(st.session_state.manual_rows)} item(s))")
+        else:
+            st.warning("Load item data in the Item Data tab first.")
+ 
+        ab_can_run = (api_key and prompt_a_name != prompt_b_name and
+                      (st.session_state.gsheet_rows or st.session_state.manual_rows))
+ 
+        ab_clicked = st.button("▶ Run A/B Compare", type="primary",
+                               disabled=not ab_can_run, use_container_width=True)
+ 
+        if ab_clicked and ab_can_run:
+            # Resolve data source
+            if st.session_state.gsheet_rows:
+                ab_pool      = st.session_state.gsheet_rows
+                ab_img_col   = next((c for c in IMAGE_COLS if c in st.session_state.gsheet_fieldnames), "(none)")
+                ab_ctx_cols  = [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS]
+            else:
+                ab_pool      = st.session_state.manual_rows
+                ab_img_col   = "ITEM_IMAGE"
+                ab_ctx_cols  = MANUAL_CONTEXT_COLS
+ 
+            if ab_sample == "Random sample" and len(ab_pool) > ab_num_rows:
+                ab_rows = random.sample(ab_pool, ab_num_rows)
+            else:
+                ab_rows = ab_pool[:ab_num_rows]
+ 
+            prompt_a_sys = st.session_state.prompts[prompt_a_name]["system"]
+            prompt_b_sys = st.session_state.prompts[prompt_b_name]["system"]
+            ab_client    = anthropic.Anthropic(api_key=api_key)
+ 
+            ab_progress = st.progress(0)
+            ab_status   = st.empty()
+            ab_results_temp = []
+ 
+            for i, row in enumerate(ab_rows):
+                label = row.get("ITEM_TITLE") or row.get("NATURAL_KEY") or f"Item {i+1}"
+                ab_status.text(f"Processing {i+1}/{len(ab_rows)}: {label}...")
+ 
+                ctx = "\n".join(
+                    f"{c}: {row.get(c,'').strip()}"
+                    for c in ab_ctx_cols if row.get(c,"").strip()
+                )
+ 
+                # Fetch image once, share between both calls
+                img_b64, img_meta = None, None
+                img_url = row.get(ab_img_col, "") if ab_img_col != "(none)" else ""
+                if img_url and img_url.startswith("http"):
+                    try:
+                        resp = requests.get(img_url, timeout=10)
+                        resp.raise_for_status()
+                        img_meta = resp.headers.get("Content-Type","image/jpeg").split(";")[0].strip()
+                        img_b64  = base64.standard_b64encode(resp.content).decode()
+                    except Exception:
+                        pass
+ 
+                def _gen(sys_prompt):
+                    content = []
+                    if img_b64:
+                        content.append({"type": "image",
+                                        "source": {"type": "base64", "media_type": img_meta, "data": img_b64}})
+                    content.append({"type": "text",
+                                    "text": f"Write a listing description for this 1stDibs item. "
+                                            f"Stay between 400 and 800 characters total.\n\nITEM DATA:\n{ctx}"})
+                    try:
+                        r = ab_client.messages.create(
+                            model=ab_model, max_tokens=220, system=sys_prompt,
+                            messages=[{"role": "user", "content": content}]
+                        )
+                        return r.content[0].text.strip()
+                    except Exception as e:
+                        return f"[Error: {e}]"
+ 
+                desc_a = _gen(prompt_a_sys)
+                desc_b = _gen(prompt_b_sys)
+ 
+                # Randomly blind the judge to reduce position bias
+                flipped = random.random() < 0.5
+                judge_a = desc_b if flipped else desc_a
+                judge_b = desc_a if flipped else desc_b
+ 
+                judge_content = (
+                    f"ITEM DATA:\n{ctx}\n\n"
+                    f"DESCRIPTION A:\n{judge_a}\n\n"
+                    f"DESCRIPTION B:\n{judge_b}"
+                )
+                try:
+                    judge_resp = ab_client.messages.create(
+                        model=ab_model, max_tokens=300, system=JUDGE_SYSTEM,
+                        messages=[{"role": "user", "content": judge_content}]
+                    )
+                    raw = judge_resp.content[0].text.strip()
+                    # Strip markdown fences if model adds them
+                    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+                    verdict = json.loads(raw)
+                except Exception as e:
+                    verdict = {"winner": "error", "confidence": "—", "reason": str(e),
+                               "a_notes": "", "b_notes": ""}
+ 
+                # Un-flip the winner back to real A/B labels
+                raw_winner = verdict.get("winner", "tie")
+                if flipped and raw_winner == "A":
+                    real_winner = "B"
+                elif flipped and raw_winner == "B":
+                    real_winner = "A"
+                else:
+                    real_winner = raw_winner
+ 
+                verdict["winner"] = real_winner
+                ab_results_temp.append({
+                    "label":            label,
+                    "desc_a":           desc_a,
+                    "desc_b":           desc_b,
+                    "img_url":          img_url,
+                    "winner":           real_winner,
+                    "confidence":       verdict.get("confidence", ""),
+                    "reason":           verdict.get("reason", ""),
+                    "accuracy_a":       verdict.get("accuracy_a", ""),
+                    "accuracy_issue_a": verdict.get("accuracy_issue_a", ""),
+                    "accuracy_b":       verdict.get("accuracy_b", ""),
+                    "accuracy_issue_b": verdict.get("accuracy_issue_b", ""),
+                    "a_notes":          verdict.get("a_notes", ""),
+                    "b_notes":          verdict.get("b_notes", ""),
+                    "ctx":              ctx,
+                })
+                ab_progress.progress((i + 1) / len(ab_rows))
+ 
+            st.session_state.ab_results = ab_results_temp
+            st.session_state.ab_prompt_a_label = prompt_a_name
+            st.session_state.ab_prompt_b_label = prompt_b_name
+            ab_status.text("✓ Done!")
+ 
+        # Results display
+        if st.session_state.ab_results:
+            results    = st.session_state.ab_results
+            a_label    = st.session_state.get("ab_prompt_a_label", "A")
+            b_label    = st.session_state.get("ab_prompt_b_label", "B")
+            a_wins     = sum(1 for r in results if r["winner"] == "A")
+            b_wins     = sum(1 for r in results if r["winner"] == "B")
+            ties       = sum(1 for r in results if r["winner"] == "tie")
+            errors     = sum(1 for r in results if r["winner"] == "error")
+            total      = len(results)
+            decidable  = total - ties - errors
+ 
+            st.divider()
+            st.subheader("Results")
+ 
+            acc_fails_a = sum(1 for r in results if r.get("accuracy_a") == "fail")
+            acc_fails_b = sum(1 for r in results if r.get("accuracy_b") == "fail")
+ 
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric(f"✅ {a_label} wins", a_wins)
+            m2.metric(f"✅ {b_label} wins", b_wins)
+            m3.metric("🤝 Ties", ties)
+            if decidable > 0:
+                win_pct = round(a_wins / decidable * 100)
+                m4.metric(f"{a_label} win rate", f"{win_pct}%", help="Excludes ties and errors")
+            m5.metric("❌ Accuracy fails", f"{acc_fails_a}A / {acc_fails_b}B",
+                      help="Items where a description invented or inferred facts not in the seller data")
+ 
+            for r in results:
+                icon = ("🅰️" if r["winner"] == "A" else
+                        "🅱️" if r["winner"] == "B" else
+                        "🤝" if r["winner"] == "tie" else "⚠️")
+                conf = f" ({r['confidence']} confidence)" if r["confidence"] not in ("", "—") else ""
+                with st.expander(f"{icon} **{r['label']}** — {r['winner'].upper()} wins{conf}"):
+                    if r.get("img_url"):
+                        try:
+                            st.image(r["img_url"], width=250)
+                        except Exception:
+                            pass
+ 
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        acc_a = r.get("accuracy_a", "")
+                        acc_icon_a = "✅ Accurate" if acc_a == "pass" else ("❌ Accuracy fail" if acc_a == "fail" else "")
+                        st.markdown(f"**{a_label}** {acc_icon_a}")
+                        if r.get("accuracy_issue_a"):
+                            st.error(f"⚠️ {r['accuracy_issue_a']}")
+                        st.write(r["desc_a"])
+                        st.caption(f"{len(r['desc_a'])} chars")
+                        if r["a_notes"]:
+                            st.caption(f"📝 {r['a_notes']}")
+                    with c2:
+                        acc_b = r.get("accuracy_b", "")
+                        acc_icon_b = "✅ Accurate" if acc_b == "pass" else ("❌ Accuracy fail" if acc_b == "fail" else "")
+                        st.markdown(f"**{b_label}** {acc_icon_b}")
+                        if r.get("accuracy_issue_b"):
+                            st.error(f"⚠️ {r['accuracy_issue_b']}")
+                        st.write(r["desc_b"])
+                        st.caption(f"{len(r['desc_b'])} chars")
+                        if r["b_notes"]:
+                            st.caption(f"📝 {r['b_notes']}")
+ 
+                    if r["reason"]:
+                        st.info(f"**Judge:** {r['reason']}")
+ 
+            # Download
+            ab_fields = ["label", "winner", "confidence", "reason",
+                         "accuracy_a", "accuracy_issue_a", "desc_a", "a_notes",
+                         "accuracy_b", "accuracy_issue_b", "desc_b", "b_notes"]
+            ab_buf = io.StringIO()
+            ab_writer = csv.DictWriter(ab_buf, fieldnames=ab_fields, extrasaction="ignore")
+            ab_writer.writeheader()
+            ab_writer.writerows(results)
+            st.download_button("⬇ Download A/B results CSV", data=ab_buf.getvalue(),
+                               file_name="ab_compare_results.csv", mime="text/csv",
+                               use_container_width=True)
+ 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
+ 
 BOILERPLATE_TRIGGERS = [
     "message us with your zip", "shipping", "contact us", "please note",
     "delivery", "white glove", "local pickup", "inquire", "call us"
 ]
-
-
+ 
+ 
 def fetch_image_as_base64(url, timeout=10):
     if not url or not url.startswith("http"):
         return None, "No image URL"
@@ -487,19 +772,19 @@ def fetch_image_as_base64(url, timeout=10):
         return None, f"HTTP {e.response.status_code}"
     except Exception as e:
         return None, str(e)
-
-
+ 
+ 
 def build_item_context(row, cols):
     return "\n".join(
         f"{col}: {row.get(col, '').strip()}"
         for col in cols if row.get(col, "").strip()
     )
-
-
+ 
+ 
 def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
                  use_suggestions, inc_cols, img_col, mdl):
     notes = []
-
+ 
     raw_context = build_item_context(row, inc_cols)
     cleaned_context = raw_context
     for trigger in BOILERPLATE_TRIGGERS:
@@ -508,17 +793,17 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
             cleaned_context = "\n".join(l for l in lines if trigger.lower() not in l.lower())
             notes.append(f"Boilerplate stripped ('{trigger}')")
             break
-
+ 
     if not cleaned_context.strip():
         notes.append("No usable item data in selected columns")
-
+ 
     img_url_for_display = row.get(img_col, "") if img_col and img_col != "(none)" else ""
     img_b64, img_meta = None, None
     if img_url_for_display:
         img_b64, img_meta = fetch_image_as_base64(img_url_for_display)
         if img_b64 is None:
             notes.append(f"Image unavailable: {img_meta}")
-
+ 
     def build_content(user_text, extra_context=""):
         content = []
         if img_b64:
@@ -529,7 +814,7 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
             body += f"\n\n{extra_context}"
         content.append({"type": "text", "text": body})
         return content
-
+ 
     def call_api(sys, user_content, max_tok):
         for attempt in range(3):
             try:
@@ -546,20 +831,20 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
                 notes.append(f"API error: {e}")
                 return ""
         return ""
-
+ 
     # Call 1 — description
     new_desc = call_api(
         sys_prompt,
         build_content("Write a listing description for this 1stDibs item. Stay between 400 and 800 characters total."),
         max_tok=220
     )
-
+ 
     char_len = len(new_desc)
     if new_desc and char_len < 400:
         notes.append(f"Below 400-char minimum ({char_len} chars)")
     if char_len > 800:
         notes.append(f"Exceeds 800-char maximum ({char_len} chars)")
-
+ 
     # Call 2 — bullets (optional)
     new_bullets = ""
     if use_bullets and bul_prompt.strip():
@@ -568,7 +853,7 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
             build_content(bul_prompt),
             max_tok=150
         )
-
+ 
     # Call 3 — smart suggestions (optional)
     new_suggestions = ""
     if use_suggestions:
@@ -580,7 +865,7 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
             ),
             max_tok=200
         )
-
+ 
     result = dict(row)
     result["NEW_DESCRIPTION"]   = new_desc
     result["CHAR_COUNT"]        = char_len
@@ -589,15 +874,15 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
     result["NOTES"]             = " | ".join(notes) if notes else ""
     result["_IMG_URL"]          = img_url_for_display
     return result
-
-
+ 
+ 
 # ── Run ────────────────────────────────────────────────────────────────────────
-
+ 
 st.divider()
-
+ 
 has_sheet_data = bool(rows and included_cols)
 has_manual     = bool(st.session_state.manual_rows)
-
+ 
 if has_sheet_data:
     run_rows       = rows
     run_cols       = included_cols
@@ -613,11 +898,11 @@ else:
     run_cols       = []
     run_img_col    = "(none)"
     run_fieldnames = []
-
+ 
 can_run = bool(api_key and system_prompt and run_rows and run_cols)
 run_clicked = st.button("▶ Run Prompt", type="primary",
                         disabled=not can_run, use_container_width=True)
-
+ 
 if not api_key:
     st.warning("Add your Anthropic API key in the sidebar.")
 elif not system_prompt or system_prompt.startswith("Fallback:"):
@@ -626,33 +911,33 @@ elif not run_rows:
     st.warning("Load item data in the Item Data tab, or add items in Quick Entry.")
 elif not run_cols:
     st.warning("Select at least one column to include as context.")
-
+ 
 if run_clicked and can_run:
     use_bullets     = enable_bullets and bool(bullet_prompt)
     use_suggestions = enable_suggestions
     client          = anthropic.Anthropic(api_key=api_key)
-
+ 
     # Sample selection
     if sample_mode == "Random sample" and len(run_rows) > num_rows:
         test_rows = random.sample(run_rows, num_rows)
     else:
         test_rows = run_rows[:num_rows]
-
+ 
     st.subheader(f"Running **{st.session_state.active}** on {len(test_rows)} item(s)...")
     progress_bar = st.progress(0)
     status_text  = st.empty()
-
+ 
     results = [None] * len(test_rows)
     lock    = threading.Lock()
     done    = [0]
-
+ 
     def process(idx_row):
         idx, row = idx_row
         return idx, generate_row(
             client, row, system_prompt, bullet_prompt,
             use_bullets, use_suggestions, run_cols, run_img_col, model
         )
-
+ 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process, (i, r)): i for i, r in enumerate(test_rows)}
         for future in as_completed(futures):
@@ -666,10 +951,10 @@ if run_clicked and can_run:
                     f"{result.get('ITEM_TITLE', result.get('NATURAL_KEY', ''))} "
                     f"({result['CHAR_COUNT']} chars)"
                 )
-
+ 
     progress_bar.progress(1.0)
     status_text.text("✓ Done!")
-
+ 
     # Metrics
     st.subheader("Results")
     avg_len = sum(r["CHAR_COUNT"] for r in results) / len(results)
@@ -678,18 +963,18 @@ if run_clicked and can_run:
     m2.metric("Below 400",  sum(1 for r in results if 0 < r["CHAR_COUNT"] < 400))
     m3.metric("Over 800",   sum(1 for r in results if r["CHAR_COUNT"] > 800))
     m4.metric("With notes", sum(1 for r in results if r["NOTES"]))
-
+ 
     for r in results:
         label = r.get("ITEM_TITLE") or r.get("NATURAL_KEY") or list(r.values())[0]
         with st.expander(f"**{label}** — {r['CHAR_COUNT']} chars"):
-
+ 
             # Image at top if available
             if r.get("_IMG_URL"):
                 try:
                     st.image(r["_IMG_URL"], width=300)
                 except Exception:
                     pass
-
+ 
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Original**")
@@ -705,18 +990,18 @@ if run_clicked and can_run:
             with c2:
                 st.markdown("**New description**")
                 st.write(r.get("NEW_DESCRIPTION", "") or "_empty_")
-
+ 
             if use_bullets and r.get("ITEM_HIGHLIGHTS"):
                 st.markdown("**✨ Item Highlights**")
                 st.info(r["ITEM_HIGHLIGHTS"])
-
+ 
             if use_suggestions and r.get("SMART_SUGGESTIONS"):
                 st.markdown("**💡 Smart Suggestions**")
                 st.info(r["SMART_SUGGESTIONS"])
-
+ 
             if r["NOTES"]:
                 st.caption(f"📝 {r['NOTES']}")
-
+ 
     # Download — only context cols sent to prompt + generated outputs
     out_fields = list(run_cols) + ["NEW_DESCRIPTION", "CHAR_COUNT"]
     if use_bullets and bool(bullet_prompt):
@@ -724,12 +1009,12 @@ if run_clicked and can_run:
     if use_suggestions:
         out_fields.append("SMART_SUGGESTIONS")
     out_fields.append("NOTES")
-
+ 
     out_buffer = io.StringIO()
     writer = csv.DictWriter(out_buffer, fieldnames=out_fields, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(results)
-
+ 
     st.download_button("⬇ Download results CSV", data=out_buffer.getvalue(),
                        file_name="prompt_test_results.csv", mime="text/csv",
                        use_container_width=True)
