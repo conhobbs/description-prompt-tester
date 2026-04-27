@@ -658,12 +658,9 @@ with tab4:
                 try:
                     judge_resp = ab_client.messages.create(
                         model=ab_model, max_tokens=400, system=JUDGE_SYSTEM,
-                        messages=[
-                            {"role": "user", "content": judge_content},
-                            {"role": "assistant", "content": "{"}  # prefill forces JSON
-                        ]
+                        messages=[{"role": "user", "content": judge_content}]
                     )
-                    raw = "{" + judge_resp.content[0].text.strip()
+                    raw = judge_resp.content[0].text.strip()
                     # Extract just the JSON object in case there's surrounding text
                     match = re.search(r'\{.*\}', raw, re.DOTALL)
                     if match:
@@ -885,12 +882,9 @@ with tab4:
                 try:
                     j_resp = pvo_client.messages.create(
                         model=pvo_model, max_tokens=400, system=JUDGE_SYSTEM,
-                        messages=[
-                            {"role": "user", "content": judge_content},
-                            {"role": "assistant", "content": "{"}
-                        ]
+                        messages=[{"role": "user", "content": judge_content}]
                     )
-                    raw   = "{" + j_resp.content[0].text.strip()
+                    raw   = j_resp.content[0].text.strip()
                     match = re.search(r'\{.*\}', raw, re.DOTALL)
                     vdict = json.loads(match.group()) if match else {}
                 except Exception as e:
@@ -1277,3 +1271,4 @@ if run_clicked and can_run:
     st.download_button("⬇ Download results CSV", data=out_buffer.getvalue(),
                        file_name="prompt_test_results.csv", mime="text/csv",
                        use_container_width=True)
+ 
