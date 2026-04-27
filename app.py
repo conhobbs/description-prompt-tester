@@ -44,24 +44,36 @@ Return a short bulleted list only — no preamble, no explanation."""
 # ── Judge prompt ──────────────────────────────────────────────────────────────
  
 JUDGE_SYSTEM = """You are an expert evaluator for 1stDibs luxury marketplace listing descriptions.
-You will be shown two descriptions (A and B) generated from the same seller item data.
+You will be shown two descriptions (A and B) generated from the same seller item data and product image.
  
 ## STEP 1 — ACCURACY GATE (mandatory, evaluated first)
-Check each description strictly against the item data provided.
-A description AUTOMATICALLY LOSES if it:
-- States any fact not present in the seller's text or clearly visible in the image
-- Implies a material, origin, period, maker, or condition detail that was not provided
-- Uses hedging to introduce unverifiable claims (e.g. "likely", "appears to be", "possibly")
  
-This is a hard disqualifier. A description that invents or infers facts creates legal risk
-("not as described" claims) and must lose regardless of how well it scores on other criteria.
-If BOTH descriptions fail the accuracy gate, set winner to "tie" and explain in the reason.
+### What is acceptable from the image
+The image may legitimately be used to describe what is directly observable:
+- Form and geometry: shape, angles, silhouette, panel configuration, leg style
+- Visible design details: carved elements, hardware type, joinery visible from the exterior
+- Color and finish appearance: 'dark-stained', 'brass-toned', 'matte finish'
+- Observable condition: visible wear, patina, surface marks
+- Structural relationships: e.g. 'back panel sits within the frame', 'seat suspended in structure'
+Do NOT penalise descriptions for including these — they are legitimate visual observations.
+ 
+### What is NOT acceptable without seller confirmation
+A description AUTOMATICALLY FAILS the accuracy gate if it states or implies:
+- Specific material identity (e.g. 'maple', 'walnut', 'welded steel', 'hand-blown glass')
+  unless the seller's text confirms the material — appearance alone is not enough
+- Construction method (e.g. 'solid', 'veneer', 'welded', 'hand-stitched') unless confirmed
+- Functional purpose inferred from form (e.g. calling a stretcher a 'footrest' unless
+  the seller describes it as such)
+- Period, origin, or attribution not stated by the seller
+- Any material grade, quality, or rarity claim
+ 
+A description that fails the accuracy gate LOSES automatically, regardless of quality.
+If BOTH fail, set winner to "tie" and explain in the reason.
  
 ## STEP 2 — QUALITY CRITERIA (only if accuracy gate is passed)
-Evaluate on:
-- TONE: mirrors the seller's language, no added adjectives, superlatives, or filler phrases
+- TONE: mirrors seller's language, no added adjectives, superlatives, or filler phrases
 - LENGTH: ideally 400–800 characters
-- SEO: primary item descriptor and key material repeated naturally 2–3 times, strong opening 160 chars
+- SEO: primary descriptor and key material repeated naturally 2–3 times, strong opening 160 chars
 - ATTRIBUTION: exactly one of: By [Name] / Attributed to [Name] / In the style of [Name]
 - FORBIDDEN: no 'Oriental', 'Primitive', urgency language, or collector superlatives
 - CONTENT: prioritises materials, condition, period/country, functional details
@@ -71,8 +83,8 @@ Return ONLY a valid JSON object — no markdown, no extra text:
 {
   "accuracy_a": "pass" or "fail",
   "accuracy_b": "pass" or "fail",
-  "accuracy_issue_a": "describe any invented fact, or empty string if pass",
-  "accuracy_issue_b": "describe any invented fact, or empty string if pass",
+  "accuracy_issue_a": "describe the specific fabrication (material/construction/function claim not in seller text), or empty string if pass",
+  "accuracy_issue_b": "describe the specific fabrication (material/construction/function claim not in seller text), or empty string if pass",
   "winner": "A" or "B" or "tie",
   "confidence": "high" or "medium" or "low",
   "reason": "one concise sentence — lead with accuracy if that decided it",
@@ -262,6 +274,19 @@ with st.sidebar:
     num_rows    = st.slider("Rows to test", min_value=1, max_value=100, value=5)
     sample_mode = st.radio("Row selection", ["From top", "Random sample"], horizontal=True)
     workers     = st.slider("Parallel workers", min_value=1, max_value=10, value=5)
+ 
+    st.divider()
+    st.subheader("Description Filter")
+    filter_by_length = st.toggle("Filter by original description length", value=False,
+                                 help="Only test items whose existing description is under a character limit.")
+    max_desc_chars = None
+    desc_col_filter = None
+    if filter_by_length:
+        max_desc_chars = st.slider("Max original description length (chars)",
+                                   min_value=50, max_value=2000, value=500, step=50)
+        desc_col_filter = st.text_input("Description column name",
+                                        value="ITEM_DESCRIPTION",
+                                        help="Column to measure. Use CHARACTER_LENGTH if you pre-computed it.")
  
 # ── Active prompt ──────────────────────────────────────────────────────────────
  
@@ -510,24 +535,28 @@ with tab3:
  
  
 with tab4:
-    st.subheader("A/B Prompt Comparison")
-    st.caption("Run the same items through two prompts and let the judge pick the winner.")
+    st.subheader("Prompt Evaluation")
+ 
+    ab_mode = st.radio("Mode", ["⚖️ A vs B", "📊 Prompt vs Original"],
+                       horizontal=True, label_visibility="collapsed")
  
     prompt_names_ab = list(st.session_state.prompts.keys())
  
-    if len(prompt_names_ab) < 2:
-        st.warning("You need at least two prompts loaded to run a comparison.")
-    else:
-        ab_col1, ab_col2 = st.columns(2)
-        with ab_col1:
-            prompt_a_name = st.selectbox("Prompt A", options=prompt_names_ab, index=0, key="ab_prompt_a")
-        with ab_col2:
-            remaining = [p for p in prompt_names_ab if p != prompt_a_name]
-            prompt_b_name = st.selectbox("Prompt B", options=prompt_names_ab,
-                                         index=min(1, len(prompt_names_ab) - 1), key="ab_prompt_b")
+    if ab_mode == "⚖️ A vs B":
+        st.caption("Run the same items through two prompts and let the judge pick the winner.")
  
-        if prompt_a_name == prompt_b_name:
-            st.warning("Select two different prompts to compare.")
+        if len(prompt_names_ab) < 2:
+            st.warning("You need at least two prompts loaded to run a comparison.")
+        else:
+            ab_col1, ab_col2 = st.columns(2)
+            with ab_col1:
+                prompt_a_name = st.selectbox("Prompt A", options=prompt_names_ab, index=0, key="ab_prompt_a")
+            with ab_col2:
+                prompt_b_name = st.selectbox("Prompt B", options=prompt_names_ab,
+                                             index=min(1, len(prompt_names_ab) - 1), key="ab_prompt_b")
+ 
+            if prompt_a_name == prompt_b_name:
+                st.warning("Select two different prompts to compare.")
  
         ab_num_rows = st.slider("Items to compare", min_value=1, max_value=50, value=5, key="ab_num_rows")
         ab_sample   = st.radio("Row selection", ["From top", "Random sample"],
@@ -757,6 +786,210 @@ with tab4:
                                file_name="ab_compare_results.csv", mime="text/csv",
                                use_container_width=True)
  
+    else:  # Prompt vs Original mode
+        st.caption("Compare the generated description against the seller's original. "
+                   "Measures whether the prompt improves on what the seller wrote.")
+ 
+        pvo_prompt_name = st.selectbox("Prompt to evaluate", options=prompt_names_ab,
+                                       index=0, key="pvo_prompt")
+        pvo_orig_col    = st.text_input("Original description column", value="ITEM_DESCRIPTION",
+                                        key="pvo_orig_col")
+        pvo_num_rows    = st.slider("Items to test", min_value=1, max_value=50, value=5, key="pvo_num_rows")
+        pvo_sample      = st.radio("Row selection", ["From top", "Random sample"],
+                                   horizontal=True, key="pvo_sample")
+        pvo_model       = st.selectbox("Judge model",
+                                       options=["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+                                       index=1, key="pvo_model")
+ 
+        if st.session_state.gsheet_rows:
+            st.info(f"Will use **{st.session_state.gsheet_loaded_name}** dataset ({len(st.session_state.gsheet_rows)} rows)")
+        elif st.session_state.manual_rows:
+            st.info(f"Will use Quick Entry queue ({len(st.session_state.manual_rows)} item(s))")
+        else:
+            st.warning("Load item data in the Item Data tab first.")
+ 
+        pvo_pool = st.session_state.gsheet_rows or st.session_state.manual_rows
+        pvo_can_run = bool(api_key and pvo_pool)
+        pvo_clicked = st.button("▶ Run Prompt vs Original", type="primary",
+                                disabled=not pvo_can_run, use_container_width=True, key="pvo_run")
+ 
+        if pvo_clicked and pvo_can_run:
+            pvo_sys     = st.session_state.prompts[pvo_prompt_name]["system"]
+            pvo_client  = anthropic.Anthropic(api_key=api_key)
+ 
+            if st.session_state.gsheet_rows:
+                pvo_img_col  = next((c for c in IMAGE_COLS if c in st.session_state.gsheet_fieldnames), "(none)")
+                pvo_ctx_cols = [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS]
+            else:
+                pvo_img_col  = "ITEM_IMAGE"
+                pvo_ctx_cols = MANUAL_CONTEXT_COLS
+ 
+            if pvo_sample == "Random sample" and len(pvo_pool) > pvo_num_rows:
+                pvo_rows = random.sample(pvo_pool, pvo_num_rows)
+            else:
+                pvo_rows = pvo_pool[:pvo_num_rows]
+ 
+            pvo_progress = st.progress(0)
+            pvo_status   = st.empty()
+            pvo_results  = []
+ 
+            for i, row in enumerate(pvo_rows):
+                label    = row.get("ITEM_TITLE") or row.get("NATURAL_KEY") or f"Item {i+1}"
+                original = row.get(pvo_orig_col, "").strip()
+                pvo_status.text(f"Processing {i+1}/{len(pvo_rows)}: {label}...")
+ 
+                ctx = "\n".join(
+                    f"{c}: {row.get(c,'').strip()}"
+                    for c in pvo_ctx_cols if row.get(c,"").strip()
+                )
+ 
+                img_b64, img_meta = None, None
+                img_url = row.get(pvo_img_col, "") if pvo_img_col != "(none)" else ""
+                if img_url and img_url.startswith("http"):
+                    try:
+                        resp     = requests.get(img_url, timeout=10)
+                        img_meta = resp.headers.get("Content-Type","image/jpeg").split(";")[0].strip()
+                        img_b64  = base64.standard_b64encode(resp.content).decode()
+                    except Exception:
+                        pass
+ 
+                # Generate description
+                gen_content = []
+                if img_b64:
+                    gen_content.append({"type": "image",
+                                        "source": {"type": "base64", "media_type": img_meta, "data": img_b64}})
+                gen_content.append({"type": "text",
+                                    "text": f"Write a listing description for this 1stDibs item. "
+                                            f"Stay between 400 and 800 characters total.\n\nITEM DATA:\n{ctx}"})
+                try:
+                    gen_resp = pvo_client.messages.create(
+                        model=pvo_model, max_tokens=220, system=pvo_sys,
+                        messages=[{"role": "user", "content": gen_content}]
+                    )
+                    generated = gen_resp.content[0].text.strip()
+                except Exception as e:
+                    generated = f"[Error: {e}]"
+ 
+                # Blind judge: randomly assign generated/original to A/B positions
+                flipped = random.random() < 0.5
+                judge_a = original  if flipped else generated
+                judge_b = generated if flipped else original
+                a_label_judge = "Original" if flipped else "Generated"
+                b_label_judge = "Generated" if flipped else "Original"
+ 
+                judge_content = (
+                    f"ITEM DATA:\n{ctx}\n\n"
+                    f"DESCRIPTION A ({a_label_judge}):\n{judge_a}\n\n"
+                    f"DESCRIPTION B ({b_label_judge}):\n{judge_b}"
+                )
+                try:
+                    j_resp = pvo_client.messages.create(
+                        model=pvo_model, max_tokens=400, system=JUDGE_SYSTEM,
+                        messages=[
+                            {"role": "user", "content": judge_content},
+                            {"role": "assistant", "content": "{"}
+                        ]
+                    )
+                    raw   = "{" + j_resp.content[0].text.strip()
+                    match = re.search(r'\{.*\}', raw, re.DOTALL)
+                    vdict = json.loads(match.group()) if match else {}
+                except Exception as e:
+                    vdict = {"winner": "error", "confidence": "—", "reason": str(e)}
+ 
+                # Translate blinded A/B back to Generated/Original
+                raw_w = vdict.get("winner", "tie")
+                if raw_w == "A":
+                    real_winner = a_label_judge
+                elif raw_w == "B":
+                    real_winner = b_label_judge
+                else:
+                    real_winner = raw_w  # "tie" or "error"
+ 
+                pvo_results.append({
+                    "label":       label,
+                    "original":    original,
+                    "generated":   generated,
+                    "img_url":     img_url,
+                    "winner":      real_winner,
+                    "confidence":  vdict.get("confidence", ""),
+                    "reason":      vdict.get("reason", ""),
+                    "acc_gen":     vdict.get("accuracy_a" if not flipped else "accuracy_b", ""),
+                    "acc_issue_gen": vdict.get("accuracy_issue_a" if not flipped else "accuracy_issue_b", ""),
+                    "gen_notes":   vdict.get("a_notes" if not flipped else "b_notes", ""),
+                    "orig_notes":  vdict.get("b_notes" if not flipped else "a_notes", ""),
+                })
+                pvo_progress.progress((i + 1) / len(pvo_rows))
+ 
+            st.session_state["pvo_results"]       = pvo_results
+            st.session_state["pvo_prompt_label"]  = pvo_prompt_name
+            pvo_status.text("✓ Done!")
+ 
+        # Prompt vs Original results
+        if st.session_state.get("pvo_results"):
+            pvo_res   = st.session_state["pvo_results"]
+            pvo_label = st.session_state.get("pvo_prompt_label", "Prompt")
+            gen_wins  = sum(1 for r in pvo_res if r["winner"] == "Generated")
+            orig_wins = sum(1 for r in pvo_res if r["winner"] == "Original")
+            ties      = sum(1 for r in pvo_res if r["winner"] == "tie")
+            acc_fails = sum(1 for r in pvo_res if r.get("acc_gen") == "fail")
+            decidable = len(pvo_res) - ties - sum(1 for r in pvo_res if r["winner"] == "error")
+ 
+            st.divider()
+            st.subheader("Results")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("✅ Generated wins", gen_wins)
+            m2.metric("📄 Original wins", orig_wins)
+            m3.metric("🤝 Ties", ties)
+            if decidable > 0:
+                m4.metric("Generated win rate", f"{round(gen_wins / decidable * 100)}%",
+                          help="How often the generated description beats the seller's original")
+            if acc_fails:
+                st.error(f"⚠️ {acc_fails} generated description(s) failed the accuracy gate.")
+ 
+            for r in pvo_res:
+                icon = ("✅" if r["winner"] == "Generated" else
+                        "📄" if r["winner"] == "Original" else
+                        "🤝" if r["winner"] == "tie" else "⚠️")
+                conf = f" ({r['confidence']} confidence)" if r.get("confidence") not in ("", "—", None) else ""
+                with st.expander(f"{icon} **{r['label']}** — {r['winner']} wins{conf}"):
+                    if r.get("img_url"):
+                        try:
+                            st.image(r["img_url"], width=250)
+                        except Exception:
+                            pass
+ 
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("**Original (seller)**")
+                        st.write(r["original"] or "_empty_")
+                        st.caption(f"{len(r['original'])} chars")
+                        if r.get("orig_notes"):
+                            st.caption(f"📝 {r['orig_notes']}")
+                    with c2:
+                        acc_icon = "✅ Accurate" if r.get("acc_gen") == "pass" else (
+                                   "❌ Accuracy fail" if r.get("acc_gen") == "fail" else "")
+                        st.markdown(f"**Generated** {acc_icon}")
+                        if r.get("acc_issue_gen"):
+                            st.error(f"⚠️ {r['acc_issue_gen']}")
+                        st.write(r["generated"] or "_empty_")
+                        st.caption(f"{len(r['generated'])} chars")
+                        if r.get("gen_notes"):
+                            st.caption(f"📝 {r['gen_notes']}")
+ 
+                    if r.get("reason"):
+                        st.info(f"**Judge:** {r['reason']}")
+ 
+            pvo_fields = ["label", "winner", "confidence", "reason",
+                          "original", "generated", "acc_gen", "acc_issue_gen",
+                          "gen_notes", "orig_notes"]
+            pvo_buf = io.StringIO()
+            pvo_writer = csv.DictWriter(pvo_buf, fieldnames=pvo_fields, extrasaction="ignore")
+            pvo_writer.writeheader()
+            pvo_writer.writerows(pvo_res)
+            st.download_button("⬇ Download results CSV", data=pvo_buf.getvalue(),
+                               file_name="prompt_vs_original.csv", mime="text/csv",
+                               use_container_width=True)
+ 
 # ── Helpers ────────────────────────────────────────────────────────────────────
  
 BOILERPLATE_TRIGGERS = [
@@ -925,11 +1158,29 @@ if run_clicked and can_run:
     use_suggestions = enable_suggestions
     client          = anthropic.Anthropic(api_key=api_key)
  
+    # Apply description length filter
+    filtered_rows = run_rows
+    if filter_by_length and max_desc_chars and desc_col_filter:
+        def _desc_len(r):
+            val = r.get(desc_col_filter, "")
+            try:
+                return int(val) if str(val).isdigit() else len(str(val))
+            except Exception:
+                return 0
+        filtered_rows = [r for r in run_rows if _desc_len(r) <= max_desc_chars]
+        if len(filtered_rows) < len(run_rows):
+            st.info(f"Filter applied: {len(filtered_rows)} of {len(run_rows)} items have "
+                    f"original descriptions ≤ {max_desc_chars} chars.")
+ 
     # Sample selection
-    if sample_mode == "Random sample" and len(run_rows) > num_rows:
-        test_rows = random.sample(run_rows, num_rows)
+    if sample_mode == "Random sample" and len(filtered_rows) > num_rows:
+        test_rows = random.sample(filtered_rows, num_rows)
     else:
-        test_rows = run_rows[:num_rows]
+        test_rows = filtered_rows[:num_rows]
+ 
+    if not test_rows:
+        st.warning("No items passed the description length filter. Try raising the limit.")
+        st.stop()
  
     st.subheader(f"Running **{st.session_state.active}** on {len(test_rows)} item(s)...")
     progress_bar = st.progress(0)
