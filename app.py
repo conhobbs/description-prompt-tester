@@ -599,15 +599,30 @@ with tab4:
                                disabled=not ab_can_run, use_container_width=True)
  
         if ab_clicked and ab_can_run:
-            # Resolve data source
+            # Resolve data source — respect the same column selection and length filter as main run
             if st.session_state.gsheet_rows:
-                ab_pool      = st.session_state.gsheet_rows
-                ab_img_col   = next((c for c in IMAGE_COLS if c in st.session_state.gsheet_fieldnames), "(none)")
-                ab_ctx_cols  = [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS]
+                ab_pool     = st.session_state.gsheet_rows
+                ab_img_col  = next((c for c in IMAGE_COLS if c in st.session_state.gsheet_fieldnames), "(none)")
+                # Use the user's column selection from tab2 if available, else all non-image cols
+                ab_ctx_cols = (st.session_state.get("col_sel_gsheet")
+                               or [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS])
             else:
-                ab_pool      = st.session_state.manual_rows
-                ab_img_col   = "ITEM_IMAGE"
-                ab_ctx_cols  = MANUAL_CONTEXT_COLS
+                ab_pool     = st.session_state.manual_rows
+                ab_img_col  = "ITEM_IMAGE"
+                ab_ctx_cols = MANUAL_CONTEXT_COLS
+ 
+            # Apply description length filter if active
+            if filter_by_length and max_desc_chars and desc_col_filter:
+                def _ab_desc_len(r):
+                    val = r.get(desc_col_filter, "")
+                    try:
+                        return int(val) if str(val).isdigit() else len(str(val))
+                    except Exception:
+                        return 0
+                ab_pool = [r for r in ab_pool if _ab_desc_len(r) <= max_desc_chars]
+                if not ab_pool:
+                    st.warning("No items passed the description length filter. Try raising the limit.")
+                    st.stop()
  
             if ab_sample == "Random sample" and len(ab_pool) > ab_num_rows:
                 ab_rows = random.sample(ab_pool, ab_num_rows)
@@ -832,17 +847,34 @@ with tab4:
             pvo_sys     = st.session_state.prompts[pvo_prompt_name]["system"]
             pvo_client  = anthropic.Anthropic(api_key=api_key)
  
+            # Resolve data source — respect column selection and length filter from tab2
             if st.session_state.gsheet_rows:
                 pvo_img_col  = next((c for c in IMAGE_COLS if c in st.session_state.gsheet_fieldnames), "(none)")
-                pvo_ctx_cols = [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS]
+                pvo_ctx_cols = (st.session_state.get("col_sel_gsheet")
+                                or [c for c in st.session_state.gsheet_fieldnames if c not in IMAGE_COLS])
+                pvo_pool_filtered = st.session_state.gsheet_rows
             else:
-                pvo_img_col  = "ITEM_IMAGE"
-                pvo_ctx_cols = MANUAL_CONTEXT_COLS
+                pvo_img_col       = "ITEM_IMAGE"
+                pvo_ctx_cols      = MANUAL_CONTEXT_COLS
+                pvo_pool_filtered = st.session_state.manual_rows
  
-            if pvo_sample == "Random sample" and len(pvo_pool) > pvo_num_rows:
-                pvo_rows = random.sample(pvo_pool, pvo_num_rows)
+            # Apply description length filter if active
+            if filter_by_length and max_desc_chars and desc_col_filter:
+                def _pvo_desc_len(r):
+                    val = r.get(desc_col_filter, "")
+                    try:
+                        return int(val) if str(val).isdigit() else len(str(val))
+                    except Exception:
+                        return 0
+                pvo_pool_filtered = [r for r in pvo_pool_filtered if _pvo_desc_len(r) <= max_desc_chars]
+                if not pvo_pool_filtered:
+                    st.warning("No items passed the description length filter. Try raising the limit.")
+                    st.stop()
+ 
+            if pvo_sample == "Random sample" and len(pvo_pool_filtered) > pvo_num_rows:
+                pvo_rows = random.sample(pvo_pool_filtered, pvo_num_rows)
             else:
-                pvo_rows = pvo_pool[:pvo_num_rows]
+                pvo_rows = pvo_pool_filtered[:pvo_num_rows]
  
             pvo_progress = st.progress(0)
             pvo_status   = st.empty()
