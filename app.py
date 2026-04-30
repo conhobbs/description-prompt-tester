@@ -46,29 +46,35 @@ Return a short bulleted list only — no preamble, no explanation."""
 JUDGE_SYSTEM = """You are an expert evaluator for 1stDibs luxury marketplace listing descriptions.
 You will be shown two descriptions (A and B) generated from the same seller item data and product image.
  
+Important context: sellers review all generated descriptions before they are published.
+Your role is to catch clear fabrications that could mislead buyers, not to penalise
+reasonable visual observations that a seller can confirm or correct.
+ 
 ## STEP 1 — ACCURACY GATE (mandatory, evaluated first)
  
-### What is acceptable from the image
-The image may legitimately be used to describe what is directly observable:
-- Form and geometry: shape, angles, silhouette, panel configuration, leg style
-- Visible design details: carved elements, hardware type, joinery visible from the exterior
-- Color and finish appearance: 'dark-stained', 'brass-toned', 'matte finish'
-- Observable condition: visible wear, patina, surface marks
-- Structural relationships: e.g. 'back panel sits within the frame', 'seat suspended in structure'
-Do NOT penalise descriptions for including these — they are legitimate visual observations.
+### Always acceptable — do NOT flag these as failures
+Visual observations about what is directly visible in the image are legitimate:
+- Form and geometry: shape, angles, silhouette, faceting, panel configuration, leg style
+- Visible construction elements: stretchers, cantilever base, slatted back, drawer configuration
+- Color and finish: 'dark-stained', 'brass-toned', 'matte lacquer', 'patinated surface'
+- Apparent materials based on clear visual evidence: calling something 'wood' when it is
+  clearly wood, 'metal frame' when metal is visible, 'upholstered seat' when fabric is visible
+- Observable condition: visible wear, patina, surface marks, restoration visible in image
+- Structural relationships: 'seat within the frame', 'suspended construction', 'floating shelf'
  
-### What is NOT acceptable without seller confirmation
-A description AUTOMATICALLY FAILS the accuracy gate if it states or implies:
-- Specific material identity (e.g. 'maple', 'walnut', 'welded steel', 'hand-blown glass')
-  unless the seller's text confirms the material — appearance alone is not enough
-- Construction method (e.g. 'solid', 'veneer', 'welded', 'hand-stitched') unless confirmed
-- Functional purpose inferred from form (e.g. calling a stretcher a 'footrest' unless
-  the seller describes it as such)
-- Period, origin, or attribution not stated by the seller
-- Any material grade, quality, or rarity claim
+### Flag as accuracy failures — only clear fabrications
+Only mark a description as failing accuracy if it:
+- Names a specific material species or grade that cannot be confirmed visually and is not
+  in the seller text (e.g. 'solid maple', 'Carrara marble', 'hand-blown Murano glass'
+  when the seller only says 'marble' or 'glass')
+- States a construction method impossible to see (e.g. 'welded', 'dovetail jointed',
+  'hand-stitched' without seller confirmation)
+- Attributes the piece to a specific designer, maker, period, or origin not stated by the seller
+- Makes a claim that directly contradicts the seller's text
+- Invents dimensions, quantities, or specifications not provided
  
-A description that fails the accuracy gate LOSES automatically, regardless of quality.
-If BOTH fail, set winner to "tie" and explain in the reason.
+When in doubt, lean toward pass. A seller can correct an over-described visual detail;
+a clearly false material claim is the real risk.
  
 ## STEP 2 — QUALITY CRITERIA (only if accuracy gate is passed)
 - TONE: mirrors seller's language, no added adjectives, superlatives, or filler phrases
@@ -83,16 +89,28 @@ Return ONLY a valid JSON object — no markdown, no extra text:
 {
   "accuracy_a": "pass" or "fail",
   "accuracy_b": "pass" or "fail",
-  "accuracy_issue_a": "describe the specific fabrication (material/construction/function claim not in seller text), or empty string if pass",
-  "accuracy_issue_b": "describe the specific fabrication (material/construction/function claim not in seller text), or empty string if pass",
+  "accuracy_issue_a": "describe only clear fabrications — specific material species, construction method, or attribution not in seller text. Empty string if pass.",
+  "accuracy_issue_b": "describe only clear fabrications — specific material species, construction method, or attribution not in seller text. Empty string if pass.",
   "winner": "A" or "B" or "tie",
   "confidence": "high" or "medium" or "low",
-  "reason": "one concise sentence — lead with accuracy if that decided it",
+  "reason": "one concise sentence — lead with accuracy only if a clear fabrication decided it",
   "a_notes": "brief strength or weakness of A",
   "b_notes": "brief strength or weakness of B"
 }
  
 Be decisive. Only use "tie" if descriptions are genuinely equivalent."""
+ 
+# ── Model pricing (per million tokens) ────────────────────────────────────────
+# https://www.anthropic.com/pricing
+MODEL_PRICING = {
+    "claude-opus-4-6":           {"input": 15.00, "output": 75.00},
+    "claude-sonnet-4-6":         {"input": 3.00,  "output": 15.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80,  "output": 4.00},
+}
+ 
+def compute_cost(model, input_tokens, output_tokens):
+    p = MODEL_PRICING.get(model, {"input": 3.00, "output": 15.00})
+    return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
  
 # ── Google Sheets loaders ──────────────────────────────────────────────────────
  
@@ -1050,13 +1068,19 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
         content.append({"type": "text", "text": body})
         return content
  
+    total_input_tokens  = 0
+    total_output_tokens = 0
+ 
     def call_api(sys, user_content, max_tok):
+        nonlocal total_input_tokens, total_output_tokens
         for attempt in range(3):
             try:
                 resp = client.messages.create(
                     model=mdl, max_tokens=max_tok, system=sys,
                     messages=[{"role": "user", "content": user_content}]
                 )
+                total_input_tokens  += resp.usage.input_tokens
+                total_output_tokens += resp.usage.output_tokens
                 return resp.content[0].text.strip()
             except anthropic.RateLimitError:
                 wait = 20 * (attempt + 1)
@@ -1101,13 +1125,18 @@ def generate_row(client, row, sys_prompt, bul_prompt, use_bullets,
             max_tok=200
         )
  
+    item_cost = compute_cost(mdl, total_input_tokens, total_output_tokens)
+ 
     result = dict(row)
     result["NEW_DESCRIPTION"]   = new_desc
     result["CHAR_COUNT"]        = char_len
-    result["ITEM_HIGHLIGHTS"]     = new_bullets
+    result["ITEM_HIGHLIGHTS"]   = new_bullets
     result["SMART_SUGGESTIONS"] = new_suggestions
     result["NOTES"]             = " | ".join(notes) if notes else ""
     result["_IMG_URL"]          = img_url_for_display
+    result["_INPUT_TOKENS"]     = total_input_tokens
+    result["_OUTPUT_TOKENS"]    = total_output_tokens
+    result["_COST_USD"]         = item_cost
     return result
  
  
@@ -1210,16 +1239,23 @@ if run_clicked and can_run:
  
     # Metrics
     st.subheader("Results")
-    avg_len = sum(r["CHAR_COUNT"] for r in results) / len(results)
-    m1, m2, m3, m4 = st.columns(4)
+    avg_len    = sum(r["CHAR_COUNT"] for r in results) / len(results)
+    total_cost = sum(r.get("_COST_USD", 0) for r in results)
+    total_in   = sum(r.get("_INPUT_TOKENS", 0) for r in results)
+    total_out  = sum(r.get("_OUTPUT_TOKENS", 0) for r in results)
+ 
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Avg length", f"{avg_len:.0f} chars")
     m2.metric("Below 400",  sum(1 for r in results if 0 < r["CHAR_COUNT"] < 400))
     m3.metric("Over 800",   sum(1 for r in results if r["CHAR_COUNT"] > 800))
     m4.metric("With notes", sum(1 for r in results if r["NOTES"]))
+    m5.metric("Total cost", f"${total_cost:.4f}",
+              help=f"{total_in:,} input + {total_out:,} output tokens ({model})")
  
     for r in results:
-        label = r.get("ITEM_TITLE") or r.get("NATURAL_KEY") or list(r.values())[0]
-        with st.expander(f"**{label}** — {r['CHAR_COUNT']} chars"):
+        label     = r.get("ITEM_TITLE") or r.get("NATURAL_KEY") or list(r.values())[0]
+        item_cost = r.get("_COST_USD", 0)
+        with st.expander(f"**{label}** — {r['CHAR_COUNT']} chars · ${item_cost:.4f}"):
  
             # Image at top if available
             if r.get("_IMG_URL"):
@@ -1271,4 +1307,3 @@ if run_clicked and can_run:
     st.download_button("⬇ Download results CSV", data=out_buffer.getvalue(),
                        file_name="prompt_test_results.csv", mime="text/csv",
                        use_container_width=True)
- 
